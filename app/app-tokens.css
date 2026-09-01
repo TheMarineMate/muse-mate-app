@@ -1,0 +1,45 @@
+/*
+ * Muse Mate app-level tokens.
+ *
+ * The platform palette and the semantic status triplets (success, warning,
+ * info, destructive) come from @intelligent-mate/ui/tokens.css. This sheet adds
+ * only what the package does not provide and MUST be imported after it.
+ */
+
+:root {
+  /* --- Product accent (Section 2). Placeholder value pending design review.
+     This is the ONLY place the Muse accent hex is written — everything else
+     references var(--accent-product). --- */
+  --accent-product: #a9835c;
+  --accent-product-hover: #8f6c49;
+  --accent-product-contrast: #ffffff;
+
+  /* --- Grounding nav. Section 2: the bottom nav stays dark navy in BOTH
+     themes, so these are deliberately not overridden under [data-theme]. --- */
+  --nav-bg: #0f1f3d;
+  --nav-text: #ffffff;
+  --nav-text-muted: #9aa4b8;
+
+  /* --- Typography (system stack, no web fonts on first paint) --- */
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial,
+    sans-serif;
+  --text-xs: 0.75rem;
+  --text-sm: 0.875rem;
+  --text-base: 1rem;
+  --text-lg: 1.125rem;
+  --text-xl: 1.375rem;
+  --text-2xl: 1.75rem;
+
+  /* --- Spacing --- */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-8: 48px;
+
+  /* --- Layout --- */
+  --nav-height: 56px;
+  --content-max: 720px;
+}
