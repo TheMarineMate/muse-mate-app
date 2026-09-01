@@ -469,3 +469,80 @@ textarea.mm-control {
   padding-top: var(--space-4);
   border-top: 1px solid var(--border-color);
 }
+
+/* --- Sourcing panel ------------------------------------------------------- */
+.mm-sourcing__log {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  max-height: 360px;
+  overflow-y: auto;
+  padding: var(--space-2) 0 var(--space-4);
+  margin-bottom: var(--space-3);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.mm-sourcing__msg {
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+
+.mm-sourcing__msg--user {
+  align-self: flex-end;
+  max-width: 85%;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--im-radius-lg, 12px);
+  background-color: var(--accent-product);
+  color: var(--accent-product-contrast, #ffffff);
+}
+
+.mm-sourcing__msg--assistant {
+  align-self: flex-start;
+  max-width: 100%;
+  color: var(--text-primary);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.mm-sourcing__listings {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.mm-listing {
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--im-radius-md, 8px);
+  border: 1px solid var(--border-color);
+  background-color: var(--bg-tertiary);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.mm-listing--primary {
+  border-color: var(--accent-product);
+}
+
+.mm-listing__title {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.mm-listing__meta {
+  display: flex;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+/* No-match: informational, deliberately NOT the error style (spec Section 5) */
+.mm-sourcing__nomatch {
+  padding: var(--space-3);
+  border-radius: var(--im-radius-md, 8px);
+  background-color: var(--info-bg);
+  color: var(--info-text);
+  border: 1px solid var(--info-border);
+  font-size: var(--text-sm);
+}

@@ -10,6 +10,7 @@ import { Fab } from '@/components/Fab'
 import { StatusBadge } from '@/components/StatusBadge'
 import { ItemFormModal } from '@/components/ItemFormModal'
 import { RoomFormModal } from '@/components/RoomFormModal'
+import { SourcingPanel } from '@/components/SourcingPanel'
 import { FloorPlanSection } from '@/components/FloorPlanSection'
 import { getSupabaseBrowserClient } from '@/lib/supabase/client'
 import {
@@ -215,6 +216,14 @@ export default function RoomDetailPage() {
           </Card>
         )}
       </div>
+
+      {canEdit && (
+        <SourcingPanel
+          roomId={room.id}
+          items={items}
+          onSourced={() => void refresh({ silent: true })}
+        />
+      )}
 
       <FloorPlanSection
         room={room}
