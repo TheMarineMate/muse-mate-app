@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit",
     "gen:icons": "node scripts/gen-placeholder-icons.mjs",
     "db:smoke": "node --env-file=.env.local scripts/db-smoke.mjs",
-    "rls:smoke": "node --env-file=.env.local scripts/rls-smoke.mjs"
+    "rls:smoke": "node --env-file=.env.local scripts/rls-smoke.mjs",
+    "dev:seed": "node --env-file=.env.local scripts/dev-seed.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.104.2",
