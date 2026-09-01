@@ -24,6 +24,11 @@ const nextConfig = {
   reactStrictMode: true,
   // Local file: dependency that ships its own 'use client' modules.
   transpilePackages: ['@intelligent-mate/ui'],
+  webpack: (config) => {
+    // konva has an optional Node "canvas" dep it never needs in the browser.
+    config.resolve.alias = { ...config.resolve.alias, canvas: false }
+    return config
+  },
   async headers() {
     return [
       {

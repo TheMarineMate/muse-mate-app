@@ -397,3 +397,75 @@ textarea.mm-control {
   color: var(--text-secondary);
   font-size: var(--text-sm);
 }
+
+/* --- Floor plan ------------------------------------------------------- */
+.mm-floorplan__canvas {
+  width: 100%;
+  border-radius: var(--im-radius-md, 8px);
+  background-color: var(--bg-tertiary);
+  overflow: hidden;
+  touch-action: none;
+}
+
+.mm-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.mm-legend__item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.mm-legend__swatch {
+  display: inline-block;
+  width: 16px;
+  height: 4px;
+  border-radius: 2px;
+}
+.mm-legend__swatch--door {
+  background-color: var(--accent-product);
+  height: 5px;
+}
+.mm-legend__swatch--window {
+  background-color: var(--info-text);
+}
+
+.mm-floorplan__controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+.mm-tray {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.mm-tray__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 4px 4px 4px 12px;
+  border-radius: 9999px;
+  background-color: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+}
+
+/* --- Destructive actions, kept apart from the primary ones ---------- */
+.mm-dangerzone {
+  margin-top: var(--space-5);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border-color);
+}

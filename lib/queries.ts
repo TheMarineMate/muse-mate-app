@@ -157,7 +157,7 @@ export async function createRoom(
 export async function updateRoom(
   supabase: SupabaseClient,
   roomId: string,
-  patch: Partial<Pick<Room, 'name' | 'notes' | 'wall_length' | 'wall_width'>>
+  patch: Partial<Pick<Room, 'name' | 'notes' | 'wall_length' | 'wall_width' | 'doors' | 'windows'>>
 ): Promise<Room> {
   const { data, error } = await supabase
     .from('rooms')
@@ -229,6 +229,44 @@ export async function updateItem(
 
 export async function deleteItem(supabase: SupabaseClient, itemId: string): Promise<void> {
   const { error } = await supabase.from('items').delete().eq('id', itemId)
+  if (error) throw error
+}
+
+// --- placements (floor plan) ---------------------------------------------
+
+export async function createPlacement(
+  supabase: SupabaseClient,
+  input: { item_id: string; room_id: string; x: number; y: number; rotation?: number }
+): Promise<Placement> {
+  const { data, error } = await supabase
+    .from('placements')
+    .insert({ rotation: 0, ...input })
+    .select()
+    .single()
+  if (error) throw error
+  return data as Placement
+}
+
+export async function updatePlacement(
+  supabase: SupabaseClient,
+  placementId: string,
+  patch: Partial<Pick<Placement, 'x' | 'y' | 'rotation'>>
+): Promise<Placement> {
+  const { data, error } = await supabase
+    .from('placements')
+    .update(patch)
+    .eq('id', placementId)
+    .select()
+    .single()
+  if (error) throw error
+  return data as Placement
+}
+
+export async function deletePlacement(
+  supabase: SupabaseClient,
+  placementId: string
+): Promise<void> {
+  const { error } = await supabase.from('placements').delete().eq('id', placementId)
   if (error) throw error
 }
 

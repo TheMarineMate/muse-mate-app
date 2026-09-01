@@ -2,31 +2,45 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
-import { useParams } from 'next/navigation'
+import { useParams, useRouter } from 'next/navigation'
 import { Button, Card, ConfirmDialog } from '@intelligent-mate/ui'
 import { FullPageSpinner } from '@/components/FullPageSpinner'
 import { EmptyState } from '@/components/EmptyState'
 import { Fab } from '@/components/Fab'
 import { StatusBadge } from '@/components/StatusBadge'
 import { ItemFormModal } from '@/components/ItemFormModal'
+import { RoomFormModal } from '@/components/RoomFormModal'
+import { FloorPlanSection } from '@/components/FloorPlanSection'
 import { getSupabaseBrowserClient } from '@/lib/supabase/client'
-import { deleteItem, getMyRole, getRoom, listItemsByRoom } from '@/lib/queries'
+import {
+  deleteItem,
+  deleteRoom,
+  getMyRole,
+  getRoom,
+  listItemsByRoom,
+  listPlacementsByRoom,
+} from '@/lib/queries'
 import { formatCurrency, formatInches } from '@/lib/format'
-import type { Item, MemberRole, Room } from '@/lib/types'
+import type { Item, MemberRole, Placement, Room } from '@/lib/types'
 
 export default function RoomDetailPage() {
   const params = useParams<{ projectId: string; roomId: string }>()
+  const router = useRouter()
   const { projectId, roomId } = params
 
   const [room, setRoom] = useState<Room | null>(null)
   const [items, setItems] = useState<Item[]>([])
+  const [placements, setPlacements] = useState<Placement[]>([])
   const [role, setRole] = useState<MemberRole | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [adding, setAdding] = useState(false)
+  const [editingRoom, setEditingRoom] = useState(false)
   const [editing, setEditing] = useState<Item | null>(null)
   const [deleting, setDeleting] = useState<Item | null>(null)
   const [deleteBusy, setDeleteBusy] = useState(false)
+  const [deletingRoom, setDeletingRoom] = useState(false)
+  const [roomDeleteBusy, setRoomDeleteBusy] = useState(false)
 
   const refresh = useCallback(
     async (opts?: { silent?: boolean }) => {
@@ -34,13 +48,15 @@ export default function RoomDetailPage() {
       try {
         const supabase = getSupabaseBrowserClient()
         const { data: auth } = await supabase.auth.getUser()
-        const [roomRow, itemRows, myRole] = await Promise.all([
+        const [roomRow, itemRows, placementRows, myRole] = await Promise.all([
           getRoom(supabase, roomId),
           listItemsByRoom(supabase, roomId),
+          listPlacementsByRoom(supabase, roomId),
           auth.user ? getMyRole(supabase, projectId, auth.user.id) : Promise.resolve(null),
         ])
         setRoom(roomRow)
         setItems(itemRows)
+        setPlacements(placementRows)
         setRole(myRole)
         setError(null)
       } catch (err) {
@@ -67,6 +83,18 @@ export default function RoomDetailPage() {
       setError(err instanceof Error ? err.message : 'Could not delete the item.')
     } finally {
       setDeleteBusy(false)
+    }
+  }
+
+  async function confirmDeleteRoom() {
+    setRoomDeleteBusy(true)
+    try {
+      await deleteRoom(getSupabaseBrowserClient(), roomId)
+      router.replace(`/projects/${projectId}`)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not delete the room.')
+      setRoomDeleteBusy(false)
+      setDeletingRoom(false)
     }
   }
 
@@ -100,8 +128,13 @@ export default function RoomDetailPage() {
       <div className="mm-row-between">
         <div>
           <h1 className="mm-page-title">{room.name}</h1>
-          {dims && <div className="mm-muted">{dims}</div>}
+          <div className="mm-muted">{dims ?? 'No measurements yet'}</div>
         </div>
+        {canEdit && (
+          <Button variant="secondary" onClick={() => setEditingRoom(true)}>
+            Edit room
+          </Button>
+        )}
       </div>
 
       {room.notes && (
@@ -183,8 +216,39 @@ export default function RoomDetailPage() {
         )}
       </div>
 
+      <FloorPlanSection
+        room={room}
+        items={items}
+        placements={placements}
+        canEdit={canEdit}
+        onEditRoom={() => setEditingRoom(true)}
+        onRoomChange={(saved) => setRoom(saved)}
+        onPlacementsChange={() => void refresh({ silent: true })}
+      />
+
+      {canEdit && (
+        <div className="mm-dangerzone">
+          <button
+            type="button"
+            className="mm-textbtn mm-textbtn--danger"
+            onClick={() => setDeletingRoom(true)}
+          >
+            Delete this room
+          </button>
+        </div>
+      )}
+
       {canEdit && <Fab label="Add item" onClick={() => setAdding(true)} />}
 
+      {editingRoom && (
+        <RoomFormModal
+          open
+          projectId={projectId}
+          room={room}
+          onClose={() => setEditingRoom(false)}
+          onSaved={(saved) => setRoom(saved)}
+        />
+      )}
       {adding && (
         <ItemFormModal
           open
@@ -211,6 +275,22 @@ export default function RoomDetailPage() {
         loading={deleteBusy}
         onConfirm={confirmDelete}
         onCancel={() => setDeleting(null)}
+      />
+      <ConfirmDialog
+        open={deletingRoom}
+        title="Delete room"
+        message={
+          items.length > 0
+            ? `Delete "${room.name}"? Its ${items.length} item${
+                items.length === 1 ? '' : 's'
+              } and any floor-plan placements go with it.`
+            : `Delete "${room.name}"? This can’t be undone.`
+        }
+        confirmLabel="Delete room"
+        destructive
+        loading={roomDeleteBusy}
+        onConfirm={confirmDeleteRoom}
+        onCancel={() => setDeletingRoom(false)}
       />
     </div>
   )
