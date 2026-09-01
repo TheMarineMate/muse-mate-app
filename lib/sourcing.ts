@@ -34,6 +34,24 @@ export type SourcingApiResponse =
 
 const HTTP_URL = /^https?:\/\/[^\s]+$/i
 
+// A search-results, category, or "browse" page is not a listing (live-test
+// finding #2). These patterns are high-confidence search/category signals —
+// deliberately conservative so real product URLs with tracking params still
+// pass. The model is also told this in the system prompt; this is the backstop.
+const SEARCH_PAGE_PATTERNS: RegExp[] = [
+  /[?&](k|q|query|keyword|keywords|search|searchterm|field-keywords|srch)=/i,
+  /\/s\?/i, // amazon /s?k=
+  /\/s\/ref=/i, // amazon
+  /\/sch\//i, // ebay search
+  /\/b\/ref=/i, // amazon browse node
+  /\/gp\/(search|bestsellers|browse|most-wished-for|new-releases)/i, // amazon
+  /\/(search|browse|results)(\/|\?|#|$)/i,
+]
+
+export function looksLikeSearchOrCategoryPage(url: string): boolean {
+  return SEARCH_PAGE_PATTERNS.some((re) => re.test(url))
+}
+
 function toDimension(value: unknown): number | null {
   if (value == null) return null
   const n = Number(value)
@@ -54,6 +72,7 @@ export function validateListing(raw: unknown): Listing | null {
 
   const url = typeof r.url === 'string' ? r.url.trim() : ''
   if (!HTTP_URL.test(url)) return null
+  if (looksLikeSearchOrCategoryPage(url)) return null
 
   const price = Number(r.price_usd ?? r.price)
   if (!Number.isFinite(price) || price <= 0) return null

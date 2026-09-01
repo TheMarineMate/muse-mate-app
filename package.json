@@ -12,7 +12,8 @@
     "db:smoke": "node --env-file=.env.local scripts/db-smoke.mjs",
     "rls:smoke": "node --env-file=.env.local scripts/rls-smoke.mjs",
     "dev:seed": "node --env-file=.env.local scripts/dev-seed.mjs",
-    "sourcing:check": "node --experimental-strip-types scripts/sourcing-check.ts"
+    "sourcing:check": "node --experimental-strip-types scripts/sourcing-check.ts",
+    "sourcing:live": "node --experimental-strip-types --env-file=.env.local scripts/sourcing-live.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.104.2",

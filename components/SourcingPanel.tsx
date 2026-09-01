@@ -1,12 +1,20 @@
 'use client'
 
-import { useRef, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { Button, Card } from '@intelligent-mate/ui'
 import { Textarea } from './Textarea'
 import { SelectField } from './SelectField'
 import { formatCurrency } from '@/lib/format'
 import type { Item } from '@/lib/types'
 import type { Listing, SourcingApiResponse } from '@/lib/sourcing'
+
+const WAIT_MESSAGES = [
+  'Searching current listings…',
+  'Still searching — comparing a few retailers…',
+  'Reading product pages…',
+  'Checking prices and availability…',
+  'Almost there…',
+]
 
 // Ephemeral (spec Section 5): the transcript lives only in this component's
 // state. Nothing is persisted but the resulting item record.
@@ -78,7 +86,19 @@ export function SourcingPanel({
   const [input, setInput] = useState('')
   const [target, setTarget] = useState('auto')
   const [busy, setBusy] = useState(false)
+  const [waitStep, setWaitStep] = useState(0)
   const logRef = useRef<HTMLDivElement>(null)
+
+  // A single search can take 30-60s. Rotate the message so the wait doesn't
+  // read as stalled.
+  useEffect(() => {
+    if (!busy) {
+      setWaitStep(0)
+      return
+    }
+    const id = setInterval(() => setWaitStep((s) => s + 1), 18000)
+    return () => clearInterval(id)
+  }, [busy])
 
   function scrollToEnd() {
     requestAnimationFrame(() => {
@@ -145,7 +165,7 @@ export function SourcingPanel({
             )}
             {busy && (
               <div className="mm-sourcing__msg mm-sourcing__msg--assistant">
-                <span className="mm-muted">Searching current listings…</span>
+                <span className="mm-muted">{WAIT_MESSAGES[Math.min(waitStep, WAIT_MESSAGES.length - 1)]}</span>
               </div>
             )}
           </div>

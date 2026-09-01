@@ -3,6 +3,7 @@
 
 import {
   composeSourcingNote,
+  looksLikeSearchOrCategoryPage,
   validateAlternatives,
   validateListing,
 } from '../lib/sourcing.ts'
@@ -43,6 +44,37 @@ check('price 0 -> null', validateListing({ ...good, price_usd: 0 }) === null)
 check('negative price -> null', validateListing({ ...good, price_usd: -5 }) === null)
 check('non-numeric price -> null', validateListing({ ...good, price_usd: 'call us' }) === null)
 check('empty title -> null', validateListing({ ...good, title: '   ' }) === null)
+
+// live-test finding #2 — search / category pages are not listings
+check(
+  'amazon /s?k= search page -> null',
+  validateListing({ ...good, url: 'https://www.amazon.com/s?k=walnut+console+table' }) === null
+)
+check(
+  '?q= query param -> null',
+  validateListing({ ...good, url: 'https://example.com/shop?q=console+table' }) === null
+)
+check(
+  '/search path -> null',
+  validateListing({ ...good, url: 'https://www.wayfair.com/furniture/search/console-table' }) === null
+)
+check(
+  'ebay /sch/ search -> null',
+  validateListing({ ...good, url: 'https://www.ebay.com/sch/i.html?_nkw=console' }) === null
+)
+check(
+  'category browse page -> null',
+  validateListing({ ...good, url: 'https://www.westelm.com/shop/furniture/browse/' }) === null
+)
+check(
+  'real product URL with tracking param still accepted (no false positive)',
+  validateListing({
+    ...good,
+    url: 'https://www.westelm.com/products/mid-century-console-h1234/?pkey=cconsoles&ref=nav',
+  }) !== null
+)
+check('looksLikeSearchOrCategoryPage: direct product path is fine', !looksLikeSearchOrCategoryPage('https://www.etsy.com/listing/123456789/fishbone-wood-shelf'))
+check('looksLikeSearchOrCategoryPage: amazon dp path is fine', !looksLikeSearchOrCategoryPage('https://www.amazon.com/dp/B0ABCDEFG'))
 check('numeric string price coerced', validateListing({ ...good, price_usd: '1299.00' })?.price === 1299)
 check('null input -> null', validateListing(null) === null)
 
