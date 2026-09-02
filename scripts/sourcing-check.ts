@@ -12,6 +12,8 @@ import {
   buildSourcingMessages,
   buildSystemPrompt,
   looksLikeSearchLimitNarration,
+  normUrl,
+  priceInPage,
   type SourcingStyleContext,
 } from '../lib/sourcing-engine.ts'
 
@@ -293,10 +295,51 @@ check(
   /Make the first query specific[\s\S]*price ceiling[\s\S]*burns your search budget/i.test(capPrompt)
 )
 check(
-  'system prompt: names the product-page retailers to try first',
-  /direct product pages: Etsy, IKEA, West Elm/i.test(capPrompt) &&
-    /Wayfair, Home Depot, and Lowe's more often return category pages/i.test(capPrompt)
+  'system prompt: leads with retailers whose search results carry prices',
+  /Lead with retailers whose SEARCH RESULTS carry the price[\s\S]*Amazon, Etsy, IKEA, Target/i.test(capPrompt)
 )
+check(
+  'system prompt: names the client-rendered retailers as fetch-unreliable',
+  /Article[\s\S]*render prices client-side[\s\S]*web_fetch on those often comes back empty/i.test(capPrompt)
+)
+check(
+  'system prompt: an empty web_fetch means the page was NOT read',
+  /web_fetch returns little or no page text[\s\S]*you have NOT read that page[\s\S]*Do not state a price/i.test(capPrompt)
+)
+check(
+  'system prompt: no repeated queries',
+  /Never issue the same query twice/i.test(capPrompt)
+)
+
+// --- price-provenance rail: a logged price must be on a fetched page ---------
+
+const PAGE =
+  'AMERLIFE King Size Solid Wood Bed Frame, Mid Century Modern. In stock and ready to ship. Price: $498.99. Free shipping over $35. Dimensions 80 x 84 x 44 inches. Add to Cart. Assembly required.'
+
+check('priceInPage: exact cents match (498.99 on a page showing $498.99)', priceInPage(498.99, PAGE))
+check('priceInPage: model rounded 498.99 -> 499 still verifies', priceInPage(499, PAGE))
+check(
+  'priceInPage: thousands separator tolerated',
+  priceInPage(1799, 'Regular price for the walnut king platform bed frame is $1,799.00 today only, in stock now with white-glove delivery included.')
+)
+check(
+  'priceInPage: bare integer with a dollar sign',
+  priceInPage(313, 'The AMERLIFE mid-century king bed frame in walnut is now $313 with promo code SAVE20 at checkout; ships free and arrives in a week.')
+)
+check(
+  'priceInPage: price not on the page -> false',
+  !priceInPage(499, 'AMERLIFE King Bed frame, solid wood, walnut finish. In stock. Add to cart. Ships in 3 business days. No price is rendered in this fetched markup.')
+)
+check('priceInPage: empty / JS-shell page -> false', !priceInPage(499, '') && !priceInPage(499, '  \n  '))
+check('priceInPage: too-short page -> false (blocked fetch)', !priceInPage(499, 'Loading… 499'))
+check(
+  'priceInPage: does not match a substring of a bigger number',
+  !priceInPage(99, 'SKU 4990012 for this listing, product weight is 199 lb, and there is no price shown anywhere on this page at all right now.')
+)
+check('priceInPage: zero / NaN price -> false', !priceInPage(0, PAGE) && !priceInPage(NaN, PAGE))
+
+check('normUrl: strips protocol/www/query/hash/trailing-slash', normUrl('HTTPS://www.Article.com/product/25632/basi/?ref=x#top') === 'article.com/product/25632/basi')
+check('normUrl: two forms of the same URL collapse', normUrl('http://example.com/p/1') === normUrl('https://example.com/p/1/'))
 
 console.log(`\n${fail === 0 ? 'SOURCING + PROMPT CHECK PASSED' : 'SOURCING + PROMPT CHECK FAILED'} (${pass} passed, ${fail} failed)`)
 process.exit(fail === 0 ? 0 : 1)

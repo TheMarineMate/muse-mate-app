@@ -18,13 +18,15 @@ const TOKENS = [
 
 export type ThemeColors = Record<(typeof TOKENS)[number], string>
 
+// Only used if getComputedStyle can't resolve a token (e.g. first paint). Keep
+// in step with app-tokens.css — brand accent, brand teal for --info-text.
 const FALLBACK: ThemeColors = {
-  '--accent-product': '#a9835c',
+  '--accent-product': '#b85e32',
   '--text-primary': '#0f1f3d',
   '--text-muted': '#8a94a6',
   '--border-color': '#dde1ec',
   '--bg-secondary': '#f5f6fa',
-  '--info-text': '#1d4ed8',
+  '--info-text': '#186b5b',
 }
 
 export function useThemeColors(): ThemeColors {

@@ -197,6 +197,12 @@ export async function POST(req: Request): Promise<NextResponse<SourcingApiRespon
       text: "I went through this pass without landing solid options. Narrow it a little — a material, a size range, or a specific store — and send again.",
     })
   }
+  if (turn.kind === 'unverified') {
+    return NextResponse.json<SourcingApiResponse>({
+      kind: 'no_match',
+      text: "I found candidates but couldn't open a product page to confirm the price, so I didn't log anything — I won't record a number I can't verify. Try a store whose prices show up in search results, like Target, Walmart, or IKEA.",
+    })
+  }
   if (turn.kind === 'message') {
     return NextResponse.json<SourcingApiResponse>({ kind: 'message', text: turn.text })
   }

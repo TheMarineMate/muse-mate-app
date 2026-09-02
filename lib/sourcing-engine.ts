@@ -50,6 +50,52 @@ export function looksLikeSearchLimitNarration(text: string): boolean {
   )
 }
 
+/** Loose URL key for matching a submitted listing URL to a fetched page —
+ *  drops protocol, "www.", trailing slash, and query/hash. */
+export function normUrl(u: string): string {
+  return String(u)
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, '')
+    .replace(/^www\./, '')
+    .replace(/[?#].*$/, '')
+    .replace(/\/+$/, '')
+}
+
+/**
+ * Is `price` actually written on this page text? Drops thousands separators,
+ * then looks for the rounded integer (±1, since the model rounds a .99) with an
+ * optional $ and optional cents. A near-empty page (blocked or JS-shell fetch)
+ * never counts as "read".
+ */
+export function priceInPage(price: number, pageText: string): boolean {
+  if (!Number.isFinite(price) || price <= 0) return false
+  if (!pageText || pageText.trim().length < 60) return false
+  const hay = pageText.replace(/,/g, '')
+  const p = Math.round(price)
+  for (const n of [p - 1, p, p + 1]) {
+    if (n > 0 && new RegExp(`(?<![\\d.])\\$?${n}(?:\\.\\d{2})?(?![\\d])`).test(hay)) return true
+  }
+  return false
+}
+
+/** Pull readable page text out of a web_fetch_tool_result block, keyed by URL.
+ *  Errors (url_not_allowed etc.) and JS-shell pages contribute nothing. */
+function collectFetched(content: unknown, into: Record<string, string>): void {
+  if (!Array.isArray(content)) return
+  for (const b of content as Record<string, unknown>[]) {
+    if (b.type !== 'web_fetch_tool_result') continue
+    const c = b.content as
+      | { type?: string; error_code?: string; url?: string; content?: unknown }
+      | undefined
+    if (!c || c.error_code || /error/i.test(String(c.type ?? ''))) continue
+    const doc = c.content as { text?: unknown; title?: unknown } | undefined
+    const text = [doc?.text, doc?.title].filter((s) => typeof s === 'string').join('\n')
+    const key = normUrl(String(c.url ?? ''))
+    if (key) into[key] = (into[key] ? `${into[key]}\n` : '') + text
+  }
+}
+
 /** True when a server tool (web_search / web_fetch) reported a usage-cap error
  *  in this response rather than results. */
 function hitToolUsageCap(content: unknown): boolean {
@@ -83,6 +129,10 @@ export type TurnOutcome =
   | { kind: 'timeout' }
   /** Ran out of searches this pass without landing anything solid. */
   | { kind: 'exhausted' }
+  /** The model tried to log a listing whose price it never actually read on a
+   *  fetched page — search snippets are opaque to us, so we can't confirm it.
+   *  Refuse rather than log a number that might be wrong. */
+  | { kind: 'unverified' }
 
 export const SUBMIT_TOOL = {
   name: 'submit_sourcing',
@@ -230,11 +280,11 @@ export function buildSystemPrompt(
     '',
     'When you do search:',
     '- Make the first query specific: product type + key attribute (wood, material, finish) + size + any price ceiling, e.g. "walnut king bed frame under $1000" — not "walnut bed". A precise query returns product pages directly; a vague one returns category pages you then have to drill into, which burns your search budget.',
-    '- Use web_search to find in-stock listings with a real USD price. Retailers whose search results tend to be direct product pages: Etsy, IKEA, West Elm, Article, CB2, Crate & Barrel, Pottery Barn, Target, and the maker\'s own store. Wayfair, Home Depot, and Lowe\'s more often return category pages — reach for those second, and expect to web_fetch.',
-    '- Never repeat a query you have already run. Each search must differ — a new retailer, different phrasing, or a loosened constraint. Two identical searches waste the budget.',
+    '- Lead with retailers whose SEARCH RESULTS carry the price and whose product pages load without JavaScript: Amazon, Etsy, IKEA, Target, Walmart, Wayfair. Article, West Elm, CB2, Crate & Barrel, Pottery Barn, Home Depot, and Lowe\'s render prices client-side — web_fetch on those often comes back empty, so only use one if the price is clearly shown in the search result itself.',
+    '- Never issue the same query twice. If a search did not get you closer, change it — a different retailer, different wording, a loosened constraint — or stop searching and use what you have. Repeating a query wastes the whole budget.',
     '- The moment a search surfaces even one direct product-page URL, web_fetch THAT page to confirm price and stock. Do not keep searching when you already have a page worth opening. Product-page URLs contain /product/, /products/, /dp/, /listing/, /p/, or /pdp/ and usually end in an id. A /b/, /c/, /shop/, /browse/, /category/, or /market/ path is a listing page — never web_fetch one of those, and never web_fetch a search URL (?k= / ?q= / /s? / /sch/); neither resolves to a single product.',
+    '- If web_fetch returns little or no page text (a blocked or client-rendered page — common on Article, Wayfair, Home Depot), you have NOT read that page. Do not state a price, stock status, or dimensions from it. Either fall back to a listing whose price is stated in the search result, or treat it as not verifiable and move on.',
     '- Every URL you log MUST be a direct, single-product page. A search-results page, a category / "shop by" / "browse" / "shop all" page, or a page listing many products is NOT a listing.',
-    '- If a search only returns category, "shop by", keyword, or listing pages (common on Wayfair, Home Depot, Walmart), pick the ONE most promising listing page and web_fetch it to pull an individual product\'s /p/ or /pdp/ link and its price.',
     '- Read each candidate product page. If it shows discontinued, no longer available, out of stock, sold out, or currently unavailable, do not log it — find another.',
     '- A few strong options, not an exhaustive list: one primary plus at most 3 alternatives.',
     '- You have a small, fixed number of searches per reply. If you use them up before finding solid options, stop and present the best 1 or 2 you have. If nothing is usable, say so plainly and ask one focused question to narrow it — a material, a size range, or a store. Never mention search limits, quotas, or "this turn", and never ask the user to tell you to keep going. Just work with what you found.',
@@ -328,8 +378,16 @@ export async function runSourcingTurn(opts: {
   }, ENGINE_TIMEOUT_MS)
   const reqOpts = { signal: controller.signal }
 
-  const logTools = (content: unknown) => {
+  const logTools = (content: unknown, stopReason?: string | null) => {
     if (!debug) return
+    if (process.env.SOURCING_DEBUG_RAW) {
+      for (const b of content as Record<string, unknown>[]) {
+        if (String(b.type ?? '').includes('tool_result')) {
+          console.error(`[sourcing:RAW ${b.type}]\n${JSON.stringify(b, null, 2).slice(0, 4000)}`)
+        }
+      }
+    }
+    if (stopReason) console.error(`[sourcing:stop] ${stopReason}`)
     for (const block of content as Record<string, unknown>[]) {
       if (
         block.type === 'server_tool_use' &&
@@ -341,12 +399,30 @@ export async function runSourcingTurn(opts: {
       if (block.type === 'web_search_tool_result') {
         const c = block.content
         if (Array.isArray(c)) {
+          console.error(`[sourcing:search-results] ${c.length} hit(s)`)
           for (const r of c as { url?: string; title?: string }[]) {
-            console.error(`[sourcing:result]   ${r.url ?? '(no url)'}  — ${r.title ?? ''}`)
+            console.error(`  ${r.url ?? '(no url)'}  — ${r.title ?? ''}`)
           }
         } else {
-          console.error(`[sourcing:result]   ERROR ${JSON.stringify(c)}`)
+          console.error(`[sourcing:search-results] ERROR ${JSON.stringify(c)}`)
         }
+      }
+      if (block.type === 'web_fetch_tool_result') {
+        const c = block.content as
+          | { type?: string; error_code?: string; url?: string; content?: { text?: string; title?: string } }
+          | undefined
+        if (!c || /error/i.test(String(c.type ?? '')) || c.error_code) {
+          console.error(`[sourcing:fetch-result] ERROR ${JSON.stringify(c)}`)
+        } else {
+          const doc = c.content ?? {}
+          const len = typeof doc.text === 'string' ? doc.text.length : 0
+          console.error(
+            `[sourcing:fetch-result] ok  ${c.url ?? '(no url)'}  ${len} chars  ${doc.title ? `"${doc.title}"` : ''}`
+          )
+        }
+      }
+      if (block.type === 'text' && typeof block.text === 'string' && block.text.trim()) {
+        console.error(`[sourcing:say] ${(block.text as string).replace(/\s+/g, ' ').trim().slice(0, 280)}`)
       }
     }
   }
@@ -380,13 +456,19 @@ export async function runSourcingTurn(opts: {
       .replace(/\n{3,}/g, '\n\n')
       .trim()
 
+  // Page text the model actually fetched this turn, keyed by URL — the only
+  // ground truth we can check a submitted price against (search snippets are
+  // encrypted server-side).
+  const fetched: Record<string, string> = {}
+
   try {
     for (let i = 0; i <= MAX_CONTINUATIONS; i++) {
       const response = await client.messages
         .stream({ ...common, messages, tools }, reqOpts)
         .finalMessage()
 
-      logTools(response.content)
+      logTools(response.content, response.stop_reason)
+      collectFetched(response.content, fetched)
 
       if (response.stop_reason === 'pause_turn') {
         messages.push({
@@ -398,7 +480,25 @@ export async function runSourcingTurn(opts: {
       }
 
       const toolUse = findSubmit(response.content)
-      if (toolUse) return { kind: 'submit', submitted: toolUse.input as SubmittedResult }
+      if (toolUse) {
+        const submitted = toolUse.input as SubmittedResult
+        if (submitted.outcome === 'sourced') {
+          const listing = (submitted.listing ?? {}) as { url?: unknown; price_usd?: unknown; price?: unknown }
+          const price = Number(listing.price_usd ?? listing.price)
+          const pageText = fetched[normUrl(String(listing.url ?? ''))] ?? ''
+          // The price must be visible on a page we actually retrieved. No fetch,
+          // a blocked/empty fetch, or a price that isn't on the page -> refuse.
+          if (!priceInPage(price, pageText)) {
+            if (debug) {
+              console.error(
+                `[sourcing:unverified] price ${price} not found on fetched text for ${listing.url} (have ${pageText.length} chars)`
+              )
+            }
+            return { kind: 'unverified' }
+          }
+        }
+        return { kind: 'submit', submitted }
+      }
 
       // Plain reply — conversational turn (with or without a search this turn).
       const raw = trailingText(response.content)

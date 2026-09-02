@@ -30,6 +30,14 @@
   --nav-text: #fbf9f5;
   --nav-text-muted: #93aec6;
 
+  /* --- Semantic: info -> teal (Section 19). The @intelligent-mate/ui default
+     is a generic blue; the brand has no blue, so the informational tint,
+     "sourced" badge, and floor-plan opening colour ride the brand teal.
+     bg/text and text/dark-surface both verified >= 4.5:1. --- */
+  --info-bg: #e4f3f0;
+  --info-text: #186b5b;
+  --info-border: #2e9e8f;
+
   /* --- Brand mark colours (consumed by <Mark />). These DO shift per theme,
      the same way the brand sheet lightens navy/teal/orange on dark. --- */
   --brand-navy: #1b3a5c;
@@ -81,6 +89,10 @@
   --brand-teal: #54c4b4;
   --brand-orange: #e8956b;
   --brand-glow: #3a4038;
+
+  --info-bg: rgba(46, 158, 143, 0.16);
+  --info-text: #5fc9ba;
+  --info-border: #3fa595;
 }
 
 /* --- Dark theme (system preference, only when no explicit light choice) --- */
@@ -94,5 +106,9 @@
     --brand-teal: #54c4b4;
     --brand-orange: #e8956b;
     --brand-glow: #3a4038;
+
+    --info-bg: rgba(46, 158, 143, 0.16);
+    --info-text: #5fc9ba;
+    --info-border: #3fa595;
   }
 }

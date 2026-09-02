@@ -212,6 +212,11 @@ for (const userTurn of turns) {
     history.push({ role: 'assistant', content: 'I came up empty this pass. Narrow it and send again.' })
     continue
   }
+  if (turn.kind === 'unverified') {
+    console.log(`<<< [${secs}s] UNVERIFIED -> no_match (price not confirmed on a fetched page — refused to log)`)
+    history.push({ role: 'assistant', content: "Couldn't confirm a price on a real page, so I logged nothing." })
+    continue
+  }
   if (turn.kind === 'message') {
     console.log(`<<< [${secs}s] MESSAGE:\n${turn.text}`)
     history.push({ role: 'assistant', content: turn.text })
