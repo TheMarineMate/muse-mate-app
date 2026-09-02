@@ -24,16 +24,18 @@ export type SourcingImage = { media_type: UploadImageMime; data: string }
 // owns auth, role checks, and the DB write (and the hard validateListing rail);
 // this owns "given the conversation, produce the next turn".
 
-// One continuation only. Each continuation is a full extra model round-trip;
-// two of them plus tool time was pushing heavy turns past the function ceiling
-// and 504-ing the follow-up turn (mobile, prod).
-const MAX_CONTINUATIONS = 1
+// Tolerate two pause_turn cycles — the search -> category-page -> web_fetch ->
+// drill-in pattern (common on Wayfair) genuinely needs them. The AbortController
+// below is the real time bound; this is just a backstop against a pause loop.
+// (The 504s that motivated cutting this were the model's own "reply go ahead"
+// continuation turn, which the tone-rail fix already removed.)
+const MAX_CONTINUATIONS = 2
 
-// Hard ceiling on one turn's model + tool work. Kept comfortably below the
-// route's 120s maxDuration so the preamble + response serialization still fit —
+// Hard ceiling on one turn's model + tool work. ~35s under the route's 120s
+// maxDuration leaves room for the Supabase preamble + response serialization —
 // a stuck turn returns a clean message, never a 504 or an indefinite spinner.
 // Overridable via env for tuning without a deploy.
-const ENGINE_TIMEOUT_MS = Number(process.env.SOURCING_TIMEOUT_MS) || 75_000
+const ENGINE_TIMEOUT_MS = Number(process.env.SOURCING_TIMEOUT_MS) || 85_000
 
 /**
  * The model, on running out of searches mid-turn, tends to narrate the limit
@@ -43,7 +45,7 @@ const ENGINE_TIMEOUT_MS = Number(process.env.SOURCING_TIMEOUT_MS) || 75_000
  * like this, we drop it and return a clean `exhausted` outcome instead.
  */
 export function looksLikeSearchLimitNarration(text: string): boolean {
-  return /\b(search|tool)\s*(limit|quota|cap|budget)\b|\bhit (my|the)(?:\s+\w+){0,2}\s*limit\b|\b(used up|ran out of|out of|no more)\s+(my\s+)?searches\b|\bfor this turn\b|\breply (?:back )?(?:with )?["']?go ahead["']?|\bsay ["']?go ahead["']?|\btell me to (?:go on|continue|keep going)\b|\blet me know (?:if|when|and) .{0,40}\b(continue|go on|keep (?:going|looking|searching))\b/i.test(
+  return /\b(search|tool|fetch)\b[^.\n]{0,20}\b(limit|quota|cap|budget)s?\b|\bhit\b[^.\n]{0,25}\blimits?\b|\b(?:reached|at|maxed out)\b[^.\n]{0,20}\blimits?\b|\blimits?\s+(?:for )?(?:this|the)\s+(?:turn|pass|reply|round)\b|\b(used up|ran out of|out of|no more)\s+(?:my\s+)?(?:searches|fetches|lookups)\b|\bfor this turn\b|\breply (?:back )?(?:with )?["']?go ahead["']?|\bsay ["']?go ahead["']?|\btell me to (?:go on|continue|keep going)\b|\blet me know (?:if|when|and) .{0,40}\b(continue|go on|keep (?:going|looking|searching))\b/i.test(
     text
   )
 }
@@ -154,8 +156,8 @@ export const SUBMIT_TOOL = {
   },
 }
 
-export const WEB_SEARCH_TOOL = { type: 'web_search_20260209', name: 'web_search', max_uses: 3 }
-export const WEB_FETCH_TOOL = { type: 'web_fetch_20260209', name: 'web_fetch', max_uses: 2 }
+export const WEB_SEARCH_TOOL = { type: 'web_search_20260209', name: 'web_search', max_uses: 4 }
+export const WEB_FETCH_TOOL = { type: 'web_fetch_20260209', name: 'web_fetch', max_uses: 4 }
 
 function styleLines(style: SourcingStyleContext): string[] {
   const out: string[] = ['', 'Project style profile (the shared direction for the whole project — spec 9.2):']
@@ -227,12 +229,16 @@ export function buildSystemPrompt(
     '- Do not judge the user\'s taste. Suggesting directions is fine; editorializing is not.',
     '',
     'When you do search:',
-    '- Use web_search to find in-stock listings with a real USD price. Good places: Etsy (for handmade, rustic, one-of-a-kind, or decor), plus Wayfair, West Elm, CB2, Crate & Barrel, Article, Pottery Barn, IKEA, Target, Home Depot, Lowe\'s, and the maker\'s own store.',
+    '- Make the first query specific: product type + key attribute (wood, material, finish) + size + any price ceiling, e.g. "walnut king bed frame under $1000" — not "walnut bed". A precise query returns product pages directly; a vague one returns category pages you then have to drill into, which burns your search budget.',
+    '- Use web_search to find in-stock listings with a real USD price. Retailers whose search results tend to be direct product pages: Etsy, IKEA, West Elm, Article, CB2, Crate & Barrel, Pottery Barn, Target, and the maker\'s own store. Wayfair, Home Depot, and Lowe\'s more often return category pages — reach for those second, and expect to web_fetch.',
+    '- Never repeat a query you have already run. Each search must differ — a new retailer, different phrasing, or a loosened constraint. Two identical searches waste the budget.',
+    '- The moment a search surfaces even one direct product-page URL, web_fetch THAT page to confirm price and stock. Do not keep searching when you already have a page worth opening. Product-page URLs contain /product/, /products/, /dp/, /listing/, /p/, or /pdp/ and usually end in an id. A /b/, /c/, /shop/, /browse/, /category/, or /market/ path is a listing page — never web_fetch one of those, and never web_fetch a search URL (?k= / ?q= / /s? / /sch/); neither resolves to a single product.',
     '- Every URL you log MUST be a direct, single-product page. A search-results page, a category / "shop by" / "browse" / "shop all" page, or a page listing many products is NOT a listing.',
-    '- If your searches only return a retailer\'s category, "shop by", keyword, or listing pages (common on Wayfair), use web_fetch to open one of those pages and pull an actual individual product\'s link and price out of it.',
+    '- If a search only returns category, "shop by", keyword, or listing pages (common on Wayfair, Home Depot, Walmart), pick the ONE most promising listing page and web_fetch it to pull an individual product\'s /p/ or /pdp/ link and its price.',
     '- Read each candidate product page. If it shows discontinued, no longer available, out of stock, sold out, or currently unavailable, do not log it — find another.',
     '- A few strong options, not an exhaustive list: one primary plus at most 3 alternatives.',
     '- You have a small, fixed number of searches per reply. If you use them up before finding solid options, stop and present the best 1 or 2 you have. If nothing is usable, say so plainly and ask one focused question to narrow it — a material, a size range, or a store. Never mention search limits, quotas, or "this turn", and never ask the user to tell you to keep going. Just work with what you found.',
+    '- If the exact spec has no in-stock match (e.g. solid walnut king under $1000 is genuinely scarce), present the closest real listings instead of nothing — a veneer or wood-finish version, or one a little over budget — and say plainly how each differs from the ask. A real near-match beats an empty result.',
     '- Give width, depth, height in inches for the primary ONLY if the page states them. Use 0 otherwise. Never estimate dimensions. Never invent a price or a link.',
     '',
     'Presenting and logging:',
@@ -309,9 +315,10 @@ export async function runSourcingTurn(opts: {
     },
   ]
   const messages: Anthropic.MessageParam[] = buildSourcingMessages(opts.messages, styleImages)
-  // A sourcing reply is a short list of options or one clarifying question —
-  // 2048 is plenty and keeps generation time (and turn latency) down.
-  const common = { model, max_tokens: 2048, system, output_config: { effort: 'medium' } } as const
+  // A sourcing reply is a short list of options or one clarifying question, but
+  // give the model headroom for tool-call planning between searches; 4096 is
+  // well under the old 8192 without risking a truncated multi-option reply.
+  const common = { model, max_tokens: 4096, system, output_config: { effort: 'medium' } } as const
 
   const controller = new AbortController()
   let aborted = false
@@ -347,11 +354,30 @@ export async function runSourcingTurn(opts: {
     content.find(
       (b): b is Anthropic.ToolUseBlock => b.type === 'tool_use' && b.name === 'submit_sourcing'
     )
-  const assistantText = (content: Anthropic.ContentBlock[]) =>
-    content
-      .filter((b): b is Anthropic.TextBlock => b.type === 'text')
-      .map((b) => b.text)
+
+  // Only the prose AFTER the last tool interaction is the reply; anything before
+  // it ("Let me open that to check the price…") is mid-turn intent narration.
+  const trailingText = (content: Anthropic.ContentBlock[]): string => {
+    let lastTool = -1
+    content.forEach((b, idx) => {
+      const t = (b as { type?: string }).type ?? ''
+      if (t === 'tool_use' || t === 'server_tool_use' || t.endsWith('_tool_result')) lastTool = idx
+    })
+    const tail = lastTool >= 0 ? content.slice(lastTool + 1) : content
+    const blocks = tail.filter((b): b is Anthropic.TextBlock => b.type === 'text')
+    const src = blocks.length
+      ? blocks
+      : content.filter((b): b is Anthropic.TextBlock => b.type === 'text')
+    return src.map((b) => b.text).join('\n')
+  }
+
+  // Drop any line that reads like search-limit narration; keep the substance.
+  const stripLimitNarration = (text: string): string =>
+    text
+      .split('\n')
+      .filter((line) => !line.trim() || !looksLikeSearchLimitNarration(line))
       .join('\n')
+      .replace(/\n{3,}/g, '\n\n')
       .trim()
 
   try {
@@ -375,13 +401,14 @@ export async function runSourcingTurn(opts: {
       if (toolUse) return { kind: 'submit', submitted: toolUse.input as SubmittedResult }
 
       // Plain reply — conversational turn (with or without a search this turn).
-      const text = assistantText(response.content)
+      const raw = trailingText(response.content)
+      const text = stripLimitNarration(raw)
+      const hasSubstance = text.length >= 60 || /\$\s?\d|https?:\/\//.test(text)
 
-      // Ran out of searches and the model is narrating the limit / asking to be
-      // told to continue: drop that prose and hand back a clean status instead.
-      if (looksLikeSearchLimitNarration(text)) return { kind: 'exhausted' }
-      // Or it hit a tool cap and had almost nothing to show for it.
-      if (hitToolUsageCap(response.content) && text.length < 140 && !/https?:\/\//.test(text)) {
+      // Ran out of searches / hit a tool cap with nothing real to show: hand
+      // back a clean status. But if the model DID land priced options, keep
+      // those — just with the "I hit my limit" line stripped out.
+      if (!hasSubstance && (looksLikeSearchLimitNarration(raw) || hitToolUsageCap(response.content))) {
         return { kind: 'exhausted' }
       }
 

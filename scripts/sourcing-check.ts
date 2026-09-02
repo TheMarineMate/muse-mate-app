@@ -247,6 +247,22 @@ check(
   looksLikeSearchLimitNarration('Just tell me to keep going.')
 )
 check(
+  'limit-narration: catches "hit search/fetch limits this turn" (broadened)',
+  looksLikeSearchLimitNarration("I've hit search/fetch limits this turn.")
+)
+check(
+  'limit-narration: catches "reached my search limit"',
+  looksLikeSearchLimitNarration("I've reached my search limit and will present what I have.")
+)
+check(
+  'limit-narration: catches "limits this turn"',
+  looksLikeSearchLimitNarration('That is where the limits this turn leave things.')
+)
+check(
+  'limit-narration: does NOT fire on "limited stock" / "weight limit"',
+  !looksLikeSearchLimitNarration('The Noble House frame is $466, limited stock, 500 lb weight limit.')
+)
+check(
   'limit-narration: does NOT fire on a normal options reply',
   !looksLikeSearchLimitNarration(
     'Here are 3 options: 1. Oak console from West Elm, $499. 2. Walnut console from CB2, $599. Which should I log?'
@@ -271,6 +287,15 @@ check(
 check(
   'system prompt: forbids asking the user to say keep going',
   /never ask the user to tell you to keep going/i.test(capPrompt)
+)
+check(
+  'system prompt: pushes a specific first query to avoid wasting the search budget',
+  /Make the first query specific[\s\S]*price ceiling[\s\S]*burns your search budget/i.test(capPrompt)
+)
+check(
+  'system prompt: names the product-page retailers to try first',
+  /direct product pages: Etsy, IKEA, West Elm/i.test(capPrompt) &&
+    /Wayfair, Home Depot, and Lowe's more often return category pages/i.test(capPrompt)
 )
 
 console.log(`\n${fail === 0 ? 'SOURCING + PROMPT CHECK PASSED' : 'SOURCING + PROMPT CHECK FAILED'} (${pass} passed, ${fail} failed)`)

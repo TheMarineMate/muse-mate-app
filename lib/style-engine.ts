@@ -15,13 +15,13 @@ export type StyleTurnMessage =
 // call. Sibling of lib/sourcing-engine.ts; the route owns auth, role checks,
 // the rails in lib/style.ts, and the DB write.
 
-// One continuation only — a second full round-trip plus tool time pushes heavy
-// turns toward the function ceiling (mirrors the sourcing-engine fix).
-const MAX_CONTINUATIONS = 1
+// Tolerate two pause_turn cycles (mirrors sourcing-engine); the AbortController
+// below is the real time bound.
+const MAX_CONTINUATIONS = 2
 
-// Hard ceiling on one turn's model + tool work. Kept well below the route's
-// 120s maxDuration so the preamble + response still fit. Overridable via env.
-const ENGINE_TIMEOUT_MS = Number(process.env.STYLE_TIMEOUT_MS) || 75_000
+// Hard ceiling on one turn's model + tool work. ~35s under the route's 120s
+// maxDuration so the preamble + response still fit. Overridable via env.
+const ENGINE_TIMEOUT_MS = Number(process.env.STYLE_TIMEOUT_MS) || 85_000
 
 export type StyleTurnOutcome =
   | { kind: 'message'; text: string }
@@ -95,8 +95,8 @@ export const CONFIRM_TOOL = {
   },
 }
 
-export const WEB_SEARCH_TOOL = { type: 'web_search_20260209', name: 'web_search', max_uses: 3 }
-export const WEB_FETCH_TOOL = { type: 'web_fetch_20260209', name: 'web_fetch', max_uses: 2 }
+export const WEB_SEARCH_TOOL = { type: 'web_search_20260209', name: 'web_search', max_uses: 4 }
+export const WEB_FETCH_TOOL = { type: 'web_fetch_20260209', name: 'web_fetch', max_uses: 3 }
 
 export type StyleContext = {
   projectName: string

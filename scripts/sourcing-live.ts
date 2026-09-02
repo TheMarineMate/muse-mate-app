@@ -207,6 +207,11 @@ for (const userTurn of turns) {
     history.push({ role: 'assistant', content: 'That search took too long.' })
     continue
   }
+  if (turn.kind === 'exhausted') {
+    console.log(`<<< [${secs}s] EXHAUSTED -> no_match (ran out of searches, nothing solid)`)
+    history.push({ role: 'assistant', content: 'I came up empty this pass. Narrow it and send again.' })
+    continue
+  }
   if (turn.kind === 'message') {
     console.log(`<<< [${secs}s] MESSAGE:\n${turn.text}`)
     history.push({ role: 'assistant', content: turn.text })
