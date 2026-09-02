@@ -6,18 +6,18 @@ import { Textarea } from './Textarea'
 import { SelectField } from './SelectField'
 import { formatCurrency } from '@/lib/format'
 import type { Item } from '@/lib/types'
-import type { Listing, SourcingApiResponse } from '@/lib/sourcing'
+import type { ConversationMessage, Listing, SourcingApiResponse } from '@/lib/sourcing'
 
 const WAIT_MESSAGES = [
+  'Thinking…',
   'Searching current listings…',
-  'Still searching — comparing a few retailers…',
   'Reading product pages…',
   'Checking prices and availability…',
-  'Almost there…',
+  'Still going…',
 ]
 
 // Ephemeral (spec Section 5): the transcript lives only in this component's
-// state. Nothing is persisted but the resulting item record.
+// state and is re-sent each turn. Nothing is persisted but the item record.
 type Entry =
   | { role: 'user'; text: string }
   | { role: 'assistant'; result: SourcingApiResponse }
@@ -30,12 +30,7 @@ function ListingCard({ listing, primary }: { listing: Listing; primary?: boolean
         {listing.retailer && <span>{listing.retailer}</span>}
         <span>{formatCurrency(listing.price)}</span>
       </div>
-      <a
-        className="mm-inlinelink"
-        href={listing.url}
-        target="_blank"
-        rel="noopener noreferrer"
-      >
+      <a className="mm-inlinelink" href={listing.url} target="_blank" rel="noopener noreferrer">
         View listing ↗
       </a>
     </div>
@@ -43,13 +38,10 @@ function ListingCard({ listing, primary }: { listing: Listing; primary?: boolean
 }
 
 function AssistantEntry({ result }: { result: SourcingApiResponse }) {
-  if (result.outcome === 'sourced') {
+  if (result.kind === 'sourced') {
     return (
       <div className="mm-sourcing__msg mm-sourcing__msg--assistant">
-        <div>
-          {result.message}
-          {result.isNewItem && <span className="mm-muted"> (new item added)</span>}
-        </div>
+        <div>{result.text}</div>
         <div className="mm-sourcing__listings">
           <ListingCard listing={result.chosen} primary />
           {result.alternatives.map((a) => (
@@ -59,18 +51,21 @@ function AssistantEntry({ result }: { result: SourcingApiResponse }) {
       </div>
     )
   }
-  if (result.outcome === 'no_match') {
+  if (result.kind === 'no_match') {
     return (
       <div className="mm-sourcing__msg mm-sourcing__msg--assistant">
-        <div className="mm-sourcing__nomatch">{result.message}</div>
+        <div className="mm-sourcing__nomatch">{result.text}</div>
       </div>
     )
   }
-  return (
-    <div className="mm-sourcing__msg mm-sourcing__msg--assistant">
-      <div className="mm-error">{result.message}</div>
-    </div>
-  )
+  if (result.kind === 'error') {
+    return (
+      <div className="mm-sourcing__msg mm-sourcing__msg--assistant">
+        <div className="mm-error">{result.text}</div>
+      </div>
+    )
+  }
+  return <div className="mm-sourcing__msg mm-sourcing__msg--assistant">{result.text}</div>
 }
 
 export function SourcingPanel({
@@ -89,8 +84,6 @@ export function SourcingPanel({
   const [waitStep, setWaitStep] = useState(0)
   const logRef = useRef<HTMLDivElement>(null)
 
-  // A single search can take 30-60s. Rotate the message so the wait doesn't
-  // read as stalled.
   useEffect(() => {
     if (!busy) {
       setWaitStep(0)
@@ -108,13 +101,20 @@ export function SourcingPanel({
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault()
-    const query = input.trim()
-    if (!query || busy) return
+    const text = input.trim()
+    if (!text || busy) return
 
-    setEntries((prev) => [...prev, { role: 'user', text: query }])
+    const nextEntries: Entry[] = [...entries, { role: 'user', text }]
+    setEntries(nextEntries)
     setInput('')
     setBusy(true)
     scrollToEnd()
+
+    const messages: ConversationMessage[] = nextEntries.map((entry) =>
+      entry.role === 'user'
+        ? { role: 'user', content: entry.text }
+        : { role: 'assistant', content: entry.result.text }
+    )
 
     let result: SourcingApiResponse
     try {
@@ -123,19 +123,19 @@ export function SourcingPanel({
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           roomId,
-          query,
+          messages,
           targetItemId: target === 'auto' ? null : target,
         }),
       })
       result = (await res.json()) as SourcingApiResponse
     } catch {
-      result = { outcome: 'error', message: 'Network error. Try again.' }
+      result = { kind: 'error', text: 'Network error. Try again.' }
     }
 
     setEntries((prev) => [...prev, { role: 'assistant', result }])
     setBusy(false)
     scrollToEnd()
-    if (result.outcome === 'sourced') onSourced()
+    if (result.kind === 'sourced') onSourced()
   }
 
   const targetOptions = [
@@ -148,8 +148,9 @@ export function SourcingPanel({
       <span className="mm-section__title">Sourcing</span>
       <Card padding="md">
         <p className="mm-muted" style={{ marginBottom: 'var(--space-3)' }}>
-          Describe an item to shop for. Real listings get logged to this room&apos;s
-          checklist — the chat itself isn&apos;t saved.
+          Describe what you&apos;re after — a rough idea is fine. I&apos;ll ask questions
+          if I need to, then search real retailers and log what I find. The chat
+          itself isn&apos;t saved.
         </p>
 
         {entries.length > 0 && (
@@ -165,7 +166,9 @@ export function SourcingPanel({
             )}
             {busy && (
               <div className="mm-sourcing__msg mm-sourcing__msg--assistant">
-                <span className="mm-muted">{WAIT_MESSAGES[Math.min(waitStep, WAIT_MESSAGES.length - 1)]}</span>
+                <span className="mm-muted">
+                  {WAIT_MESSAGES[Math.min(waitStep, WAIT_MESSAGES.length - 1)]}
+                </span>
               </div>
             )}
           </div>
@@ -173,15 +176,15 @@ export function SourcingPanel({
 
         <form className="mm-form" onSubmit={onSubmit}>
           <Textarea
-            label="What do you need?"
+            label={entries.length === 0 ? 'What do you have in mind?' : 'Reply'}
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder="Fishbone wall shelf, natural wood, about 30 inches wide"
+            placeholder="Something cozy for the reading corner — maybe a small accent chair"
             disabled={busy}
           />
           {items.length > 0 && (
             <SelectField
-              label="Where to log it"
+              label="Where to log anything found"
               value={target}
               onChange={(e) => setTarget(e.target.value)}
               options={targetOptions}
@@ -190,7 +193,7 @@ export function SourcingPanel({
           )}
           <div>
             <Button type="submit" loading={busy}>
-              Find listings
+              Send
             </Button>
           </div>
         </form>

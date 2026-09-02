@@ -1,16 +1,18 @@
 import type Anthropic from '@anthropic-ai/sdk'
+import type { ConversationMessage } from './sourcing'
 
-// The AI orchestration for the sourcing feature — the system prompt, the tool
-// set, and the pause_turn-aware loop. Kept separate from the route so it can be
-// exercised directly (scripts/sourcing-live.mjs). The route owns auth, role
-// checks, and the DB write; this owns "ask the model, get a structured result".
+// The AI orchestration for the sourcing feature: the system prompt, the tool
+// set, and the loop that turns a conversation into one assistant turn — which
+// is either a plain message or a structured submit_sourcing call. The route
+// owns auth, role checks, and the DB write (and the hard validateListing rail);
+// this owns "given the conversation, produce the next turn".
 
-const MAX_CONTINUATIONS = 1
+const MAX_CONTINUATIONS = 2
 
-// Hard ceiling on the whole model+search operation. Above observed happy-path
-// latency (~30-60s) with real headroom, and well under the route's 120s
-// maxDuration — so a stuck search returns a clean message, never a 504 or an
-// indefinite spinner. Overridable via env for tuning without a deploy.
+// Hard ceiling on one turn's model + tool work. Above observed search-turn
+// latency (~30-60s) with headroom, well under the route's 120s maxDuration —
+// a stuck turn returns a clean message, never a 504 or an indefinite spinner.
+// Overridable via env for tuning without a deploy.
 const ENGINE_TIMEOUT_MS = Number(process.env.SOURCING_TIMEOUT_MS) || 90_000
 
 export type Match = { kind?: string; item_id?: string; item_name?: string }
@@ -21,10 +23,15 @@ export type SubmittedResult = {
   alternatives?: unknown
 }
 
+export type TurnOutcome =
+  | { kind: 'message'; text: string }
+  | { kind: 'submit'; submitted: SubmittedResult }
+  | { kind: 'timeout' }
+
 export const SUBMIT_TOOL = {
   name: 'submit_sourcing',
   description:
-    'Report the sourcing result. Call this exactly once, after you have finished researching with web_search.',
+    'Log a listing the user has chosen to the room checklist. Only call this after the user has picked an option (or told you to just log the best match) — not on your first search. The listing must be an in-stock, single-product page with a real price. At most once per turn.',
   strict: true,
   input_schema: {
     type: 'object',
@@ -94,6 +101,7 @@ export const SUBMIT_TOOL = {
 }
 
 export const WEB_SEARCH_TOOL = { type: 'web_search_20260209', name: 'web_search', max_uses: 4 }
+export const WEB_FETCH_TOOL = { type: 'web_fetch_20260209', name: 'web_fetch', max_uses: 3 }
 
 export function buildSystemPrompt(
   roomName: string,
@@ -105,52 +113,71 @@ export function buildSystemPrompt(
       ? items.map((i) => `- ${i.id} — ${i.name} (${i.status})`).join('\n')
       : '- none yet'
   return [
-    'You are a purchasing assistant for one room in a home-design project. Your only job is to find real, currently-purchasable listings for furniture and decor the user describes, then report them as structured data.',
+    'You help someone furnish one room in a home-design project. You can hold a normal back-and-forth: talk through a vague idea, ask a question, suggest directions — and, when there is something specific to look for, search real retailers and log verified listings to their room.',
     '',
     `Room: "${roomName}"${dims ? ` (${dims})` : ''}`,
     "Items already on this room's list (id — name (status)):",
     itemLines,
     '',
-    'Rules:',
-    '- Use web_search to find 2 to 4 listings that are for sale right now, each with a real USD price.',
-    "- Good places to look: Etsy (especially for handmade, rustic, one-of-a-kind, or decorative pieces — check Etsy for any decor or handmade-style request), plus Wayfair, West Elm, CB2, Crate & Barrel, Article, Pottery Barn, IKEA, Target, Home Depot, Lowe's, and the maker's own store.",
-    '- Every URL you cite MUST be a direct, single-product page. A search-results page, a category or "browse" or "shop all" page, or a page listing many products is NOT a listing — never cite one, not even as an alternative.',
-    '- Open each candidate product page and read its content before citing it. If the page says discontinued, no longer available, out of stock, sold out, currently unavailable, or similar, exclude that listing entirely — do not cite it as the primary listing or as an alternative. Find an in-stock listing instead.',
-    '- Choose the single best in-stock match as the primary listing; the rest are alternatives (at most 3).',
-    '- Report outcome "sourced" ONLY if the primary listing is a real, in-stock, single-product page with a real price. If you cannot find one, report outcome "no_match" — that is a valid answer, not a failure. Do not invent prices or links.',
-    '- Give width, depth, and height in inches for the primary listing ONLY if the listing states them. Use 0 for any dimension the listing does not give. Never estimate dimensions.',
-    '- If the request clearly matches one of the existing items above, set match.kind = "existing" and match.item_id to that id. Otherwise set match.kind = "new", match.item_id = "", and match.item_name to a short name.',
-    "- Do not comment on the user's taste, style, or design choices. Do not editorialize. Only find and report listings.",
-    '- You have a budget of about 4 searches. Use them — try a couple of different retailers and phrasings before concluding nothing is available, especially for common furniture. But do not exceed ~4 searches: after that, STOP and call submit_sourcing exactly once. If you still have no solid in-stock single-product listing, call submit_sourcing with outcome "no_match". Never end your turn without calling submit_sourcing.',
+    'Conversation:',
+    '- If the request is a vibe or underspecified, do NOT search yet. Ask one focused clarifying question, or offer 2 or 3 concrete directions, and wait for a reply.',
+    '- Search only once you have a specific product type plus a style, material, size, or a named retailer.',
+    '- Keep replies short — a few sentences. No em dashes, no rule-of-three flourishes, no "I\'d be happy to", no restating the request back to the user.',
+    '- Do not judge the user\'s taste. Suggesting directions is fine; editorializing is not.',
+    '',
+    'When you do search:',
+    '- Use web_search to find in-stock listings with a real USD price. Good places: Etsy (for handmade, rustic, one-of-a-kind, or decor), plus Wayfair, West Elm, CB2, Crate & Barrel, Article, Pottery Barn, IKEA, Target, Home Depot, Lowe\'s, and the maker\'s own store.',
+    '- Every URL you log MUST be a direct, single-product page. A search-results page, a category / "shop by" / "browse" / "shop all" page, or a page listing many products is NOT a listing.',
+    '- If your searches only return a retailer\'s category, "shop by", keyword, or listing pages (common on Wayfair), use web_fetch to open one of those pages and pull an actual individual product\'s link and price out of it.',
+    '- Read each candidate product page. If it shows discontinued, no longer available, out of stock, sold out, or currently unavailable, do not log it — find another.',
+    '- A few strong options, not an exhaustive list: one primary plus at most 3 alternatives.',
+    '- Give width, depth, height in inches for the primary ONLY if the page states them. Use 0 otherwise. Never estimate dimensions. Never invent a price or a link.',
+    '',
+    'Presenting and logging:',
+    '- After you search, reply with 2 to 4 options — name, retailer, price, and link for each — and ask which one to log. Do NOT log anything yet.',
+    '- Call submit_sourcing only after the user picks an option, OR when the user explicitly asked you to just find and log the best match without reviewing. Never log an item the user has not chosen.',
+    '- When you do call submit_sourcing: it must be a verified listing (real price, real single-product URL, in stock). Set match.kind = "existing" + match.item_id if it clearly matches an item on the room list above; otherwise match.kind = "new" with a short match.item_name.',
+    '- If the room already has an item matching what the user picked, use match.kind = "existing" so it updates that item instead of adding a duplicate.',
+    '- If you searched and found nothing solid, say so and ask how to adjust. Do not log an unverified listing.',
   ].join('\n')
 }
 
-export type EngineOutcome =
-  | { kind: 'result'; submitted: SubmittedResult }
-  | { kind: 'no_result' }
-  | { kind: 'timeout' }
+const FALLBACK_MESSAGE =
+  'Tell me a bit more about what you have in mind and I can look for options.'
 
 /**
- * Runs the model with web_search + submit_sourcing, resuming on pause_turn.
- * Aborts the whole operation after ENGINE_TIMEOUT_MS and reports 'timeout'
- * rather than letting the request hang.
+ * Produce the next assistant turn for a sourcing conversation. Aborts after
+ * ENGINE_TIMEOUT_MS and reports 'timeout' rather than hanging.
  */
-export async function runSourcing(opts: {
+export async function runSourcingTurn(opts: {
   client: Anthropic
   model: string
   roomName: string
   dims: string | null
   items: { id: string; name: string; status: string }[]
-  query: string
-}): Promise<EngineOutcome> {
-  const { client, model, roomName, dims, items, query } = opts
-  const tools = [WEB_SEARCH_TOOL, SUBMIT_TOOL] as unknown as Anthropic.Messages.ToolUnion[]
-  const messages: Anthropic.MessageParam[] = [{ role: 'user', content: query }]
-  const system = buildSystemPrompt(roomName, dims, items)
+  messages: ConversationMessage[]
+}): Promise<TurnOutcome> {
+  const { client, model, roomName, dims, items } = opts
+  const tools = [
+    WEB_SEARCH_TOOL,
+    WEB_FETCH_TOOL,
+    SUBMIT_TOOL,
+  ] as unknown as Anthropic.Messages.ToolUnion[]
   const debug = Boolean(process.env.SOURCING_DEBUG)
 
-  // effort:"medium" balances thoroughness against latency on this
-  // latency-sensitive route; streaming holds the HTTP connection open.
+  // Stable prefix (system + tools) first with a cache breakpoint; the volatile
+  // conversation comes after.
+  const system = [
+    {
+      type: 'text' as const,
+      text: buildSystemPrompt(roomName, dims, items),
+      cache_control: { type: 'ephemeral' as const },
+    },
+  ]
+  const messages: Anthropic.MessageParam[] = opts.messages.map((m) => ({
+    role: m.role,
+    content: m.content,
+  }))
   const common = { model, max_tokens: 8192, system, output_config: { effort: 'medium' } } as const
 
   const controller = new AbortController()
@@ -161,13 +188,25 @@ export async function runSourcing(opts: {
   }, ENGINE_TIMEOUT_MS)
   const reqOpts = { signal: controller.signal }
 
-  const logSearches = (content: unknown) => {
+  const logTools = (content: unknown) => {
     if (!debug) return
     for (const block of content as Record<string, unknown>[]) {
-      if (block.type === 'server_tool_use' && block.name === 'web_search') {
-        console.error(
-          `[sourcing:search] ${JSON.stringify((block.input as { query?: string })?.query)}`
-        )
+      if (
+        block.type === 'server_tool_use' &&
+        (block.name === 'web_search' || block.name === 'web_fetch')
+      ) {
+        const inp = block.input as { query?: string; url?: string }
+        console.error(`[sourcing:${block.name}] ${JSON.stringify(inp?.query ?? inp?.url ?? inp)}`)
+      }
+      if (block.type === 'web_search_tool_result') {
+        const c = block.content
+        if (Array.isArray(c)) {
+          for (const r of c as { url?: string; title?: string }[]) {
+            console.error(`[sourcing:result]   ${r.url ?? '(no url)'}  — ${r.title ?? ''}`)
+          }
+        } else {
+          console.error(`[sourcing:result]   ERROR ${JSON.stringify(c)}`)
+        }
       }
     }
   }
@@ -175,63 +214,37 @@ export async function runSourcing(opts: {
     content.find(
       (b): b is Anthropic.ToolUseBlock => b.type === 'tool_use' && b.name === 'submit_sourcing'
     )
+  const assistantText = (content: Anthropic.ContentBlock[]) =>
+    content
+      .filter((b): b is Anthropic.TextBlock => b.type === 'text')
+      .map((b) => b.text)
+      .join('\n')
+      .trim()
 
   try {
-    let stillSearching = false
-
     for (let i = 0; i <= MAX_CONTINUATIONS; i++) {
       const response = await client.messages
         .stream({ ...common, messages, tools }, reqOpts)
         .finalMessage()
 
-      logSearches(response.content)
-      messages.push({
-        role: 'assistant',
-        content: response.content as unknown as Anthropic.ContentBlockParam[],
-      })
+      logTools(response.content)
 
       if (response.stop_reason === 'pause_turn') {
-        // Resume the server-tool loop by resending (the API detects the trailing
-        // server_tool_use — no extra user message).
-        stillSearching = i === MAX_CONTINUATIONS
+        messages.push({
+          role: 'assistant',
+          content: response.content as unknown as Anthropic.ContentBlockParam[],
+        })
+        if (i === MAX_CONTINUATIONS) return { kind: 'timeout' } // still mid-search
         continue
       }
 
       const toolUse = findSubmit(response.content)
-      if (toolUse) return { kind: 'result', submitted: toolUse.input as SubmittedResult }
-      stillSearching = false
-      break
+      if (toolUse) return { kind: 'submit', submitted: toolUse.input as SubmittedResult }
+
+      // Plain reply — conversational turn (with or without a search this turn).
+      return { kind: 'message', text: assistantText(response.content) || FALLBACK_MESSAGE }
     }
-
-    // Ran out of continuations mid-search. Appending a user message here would be
-    // rejected (turn ends in an unresolved search), so give up -> no_result.
-    if (stillSearching) return { kind: 'no_result' }
-
-    // Turn ended cleanly but the model never reported. Force one structured
-    // answer from what it already found — no web_search on this call.
-    const forced = await client.messages
-      .stream(
-        {
-          ...common,
-          max_tokens: 4096,
-          messages: [
-            ...messages,
-            {
-              role: 'user',
-              content:
-                'Stop searching. Report what you have now with submit_sourcing. Use outcome "no_match" if you do not have a solid in-stock single-product listing.',
-            },
-          ],
-          tools: [SUBMIT_TOOL] as unknown as Anthropic.Messages.ToolUnion[],
-          tool_choice: { type: 'tool', name: 'submit_sourcing' },
-        },
-        reqOpts
-      )
-      .finalMessage()
-    const forcedUse = findSubmit(forced.content)
-    return forcedUse
-      ? { kind: 'result', submitted: forcedUse.input as SubmittedResult }
-      : { kind: 'no_result' }
+    return { kind: 'timeout' }
   } catch (err) {
     if (aborted) return { kind: 'timeout' }
     throw err

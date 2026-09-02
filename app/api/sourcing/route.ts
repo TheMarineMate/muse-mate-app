@@ -1,41 +1,55 @@
 import { NextResponse } from 'next/server'
 import { getSupabaseServerClient } from '@/lib/supabase/server'
 import { getAnthropicClient, isAnthropicConfigured, ANTHROPIC_MODEL } from '@/lib/anthropic'
-import { runSourcing } from '@/lib/sourcing-engine'
+import { runSourcingTurn } from '@/lib/sourcing-engine'
 import {
   composeSourcingNote,
   validateAlternatives,
   validateListing,
+  type ConversationMessage,
   type SourcingApiResponse,
 } from '@/lib/sourcing'
 
 export const runtime = 'nodejs'
-// Web search + reading pages can take a while. Needs a Vercel plan that allows
-// >60s functions (Pro+); on Hobby it caps at 60s and long searches will 504.
+// Search turns (web_search + web_fetch) can take a while. Needs a Vercel plan
+// that allows >60s functions (Pro+); the engine's own 90s abort keeps a turn
+// under this ceiling.
 export const maxDuration = 120
 
-const noMatch = (query: string): SourcingApiResponse => ({
-  outcome: 'no_match',
-  message: `No solid listing found yet for "${query}". Add a detail like material, a size range, or a retailer, and try again.`,
-  query,
-})
+const MAX_MESSAGES = 24
+const MAX_CONTENT = 2000
+
+const errJson = (message: string, status: number, code?: string) =>
+  NextResponse.json<SourcingApiResponse>({ kind: 'error', text: message, ...(code ? { code } : {}) }, { status })
+
+function parseMessages(raw: unknown): ConversationMessage[] | null {
+  if (!Array.isArray(raw) || raw.length === 0 || raw.length > MAX_MESSAGES) return null
+  const out: ConversationMessage[] = []
+  for (const m of raw) {
+    if (!m || typeof m !== 'object') return null
+    const { role, content } = m as { role?: unknown; content?: unknown }
+    if ((role !== 'user' && role !== 'assistant') || typeof content !== 'string') return null
+    const text = content.trim().slice(0, MAX_CONTENT)
+    if (!text) return null
+    out.push({ role, content: text })
+  }
+  if (out[0].role !== 'user') return null
+  return out
+}
 
 export async function POST(req: Request): Promise<NextResponse<SourcingApiResponse>> {
-  let body: { roomId?: unknown; query?: unknown; targetItemId?: unknown }
+  let body: { roomId?: unknown; messages?: unknown; targetItemId?: unknown }
   try {
     body = await req.json()
   } catch {
-    return NextResponse.json({ outcome: 'error', message: 'Bad request.' }, { status: 400 })
+    return errJson('Bad request.', 400)
   }
 
   const roomId = typeof body.roomId === 'string' ? body.roomId : ''
-  const query = typeof body.query === 'string' ? body.query.trim().slice(0, 500) : ''
+  const messages = parseMessages(body.messages)
   const targetItemId = typeof body.targetItemId === 'string' ? body.targetItemId : null
-  if (!roomId || !query) {
-    return NextResponse.json(
-      { outcome: 'error', message: 'Describe the item you want to source.' },
-      { status: 400 }
-    )
+  if (!roomId || !messages) {
+    return errJson('Say what you have in mind.', 400)
   }
 
   // Auth and role gate first — an unauthenticated or view-only caller never
@@ -44,39 +58,23 @@ export async function POST(req: Request): Promise<NextResponse<SourcingApiRespon
   const {
     data: { user },
   } = await supabase.auth.getUser()
-  if (!user) {
-    return NextResponse.json({ outcome: 'error', message: 'Sign in first.' }, { status: 401 })
-  }
+  if (!user) return errJson('Sign in first.', 401)
 
   const { data: room } = await supabase
     .from('rooms')
     .select('id, name, project_id, wall_length, wall_width')
     .eq('id', roomId)
     .maybeSingle()
-  if (!room) {
-    return NextResponse.json({ outcome: 'error', message: 'Room not found.' }, { status: 404 })
-  }
+  if (!room) return errJson('Room not found.', 404)
 
   const { data: canEdit } = await supabase.rpc('is_project_member', {
     p_project_id: room.project_id,
     p_min_role: 'editor',
   })
-  if (!canEdit) {
-    return NextResponse.json(
-      { outcome: 'error', message: "You don't have edit access to this project." },
-      { status: 403 }
-    )
-  }
+  if (!canEdit) return errJson("You don't have edit access to this project.", 403)
 
   if (!isAnthropicConfigured()) {
-    return NextResponse.json(
-      {
-        outcome: 'error',
-        message: "Sourcing isn't set up on this deployment yet.",
-        code: 'not_configured',
-      },
-      { status: 503 }
-    )
+    return errJson("Sourcing isn't set up on this deployment yet.", 503, 'not_configured')
   }
 
   const { data: itemRows } = await supabase
@@ -91,41 +89,39 @@ export async function POST(req: Request): Promise<NextResponse<SourcingApiRespon
       ? `${Number(room.wall_length)}in x ${Number(room.wall_width)}in`
       : null
 
-  let engine
+  let turn
   try {
-    engine = await runSourcing({
+    turn = await runSourcingTurn({
       client: getAnthropicClient(),
       model: ANTHROPIC_MODEL,
       roomName: room.name,
       dims,
       items,
-      query,
+      messages,
     })
   } catch (err) {
     console.error('[sourcing] anthropic error', err)
-    return NextResponse.json(
-      { outcome: 'error', message: 'The sourcing assistant is unavailable right now.' },
-      { status: 502 }
-    )
+    return errJson('The sourcing assistant is unavailable right now.', 502)
   }
 
-  if (engine.kind === 'timeout') {
-    return NextResponse.json({
-      outcome: 'no_match',
-      message:
-        'That search took too long — try a more specific query (a material, a size, or a retailer).',
-      query,
+  if (turn.kind === 'timeout') {
+    return NextResponse.json<SourcingApiResponse>({
+      kind: 'no_match',
+      text: 'That search took a while and I came up empty. Try narrowing it down — a material, a size, or a specific retailer.',
     })
   }
-  if (engine.kind === 'no_result') {
-    return NextResponse.json(noMatch(query))
+  if (turn.kind === 'message') {
+    return NextResponse.json<SourcingApiResponse>({ kind: 'message', text: turn.text })
   }
-  const submitted = engine.submitted
 
-  // --- Rail: only a verified listing produces a "sourced" outcome --------
+  // turn.kind === 'submit' — run the hard rail before any write.
+  const submitted = turn.submitted
   const chosen = submitted.outcome === 'sourced' ? validateListing(submitted.listing) : null
   if (!chosen) {
-    return NextResponse.json(noMatch(query))
+    return NextResponse.json<SourcingApiResponse>({
+      kind: 'no_match',
+      text: "I found a page but couldn't confirm a real price or a direct product link, so I didn't log anything. Want me to try a different retailer?",
+    })
   }
   const alternatives = validateAlternatives(submitted.alternatives)
   const note = composeSourcingNote(chosen, alternatives)
@@ -166,15 +162,12 @@ export async function POST(req: Request): Promise<NextResponse<SourcingApiRespon
       .single()
     if (error || !data) {
       console.error('[sourcing] update failed', error)
-      return NextResponse.json(
-        { outcome: 'error', message: 'Could not update the item.' },
-        { status: 500 }
-      )
+      return errJson('Could not update the item.', 500)
     }
     saved = data
   } else {
     isNewItem = true
-    const name = (match.item_name?.trim() || query).slice(0, 120)
+    const name = (match.item_name?.trim() || chosen.title).slice(0, 120)
     const { data, error } = await supabase
       .from('items')
       .insert({ room_id: roomId, name, priority: 'nice-to-have', ...sourcedFields })
@@ -182,17 +175,17 @@ export async function POST(req: Request): Promise<NextResponse<SourcingApiRespon
       .single()
     if (error || !data) {
       console.error('[sourcing] insert failed', error)
-      return NextResponse.json(
-        { outcome: 'error', message: 'Could not save the sourced item.' },
-        { status: 500 }
-      )
+      return errJson('Could not save the sourced item.', 500)
     }
     saved = data
   }
 
-  return NextResponse.json({
-    outcome: 'sourced',
-    message: `Logged "${chosen.title}" to ${saved.name}.`,
+  const money = `$${Math.round(chosen.price).toLocaleString('en-US')}`
+  const text = `Logged ${chosen.title}${chosen.retailer ? ` from ${chosen.retailer}` : ''} at ${money} to ${saved.name}${isNewItem ? ' (new item)' : ''}.`
+
+  return NextResponse.json<SourcingApiResponse>({
+    kind: 'sourced',
+    text,
     itemId: saved.id,
     itemName: saved.name,
     isNewItem,

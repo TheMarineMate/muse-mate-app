@@ -13,24 +13,30 @@ export type Listing = {
   height_in: number | null
 }
 
+export type ConversationMessage = { role: 'user' | 'assistant'; content: string }
+
 export type SourcingRequestBody = {
   roomId: string
-  query: string
+  messages: ConversationMessage[]
   targetItemId?: string | null
 }
 
+// One assistant turn. `message` = it talked (maybe after searching) and wrote
+// nothing. `sourced` = it logged a verified listing. `no_match` = it searched
+// and found nothing solid (or timed out). `error` = request failed.
 export type SourcingApiResponse =
+  | { kind: 'message'; text: string }
   | {
-      outcome: 'sourced'
-      message: string
+      kind: 'sourced'
+      text: string
       itemId: string
       itemName: string
       isNewItem: boolean
       chosen: Listing
       alternatives: Listing[]
     }
-  | { outcome: 'no_match'; message: string; query: string }
-  | { outcome: 'error'; message: string; code?: string }
+  | { kind: 'no_match'; text: string }
+  | { kind: 'error'; text: string; code?: string }
 
 const HTTP_URL = /^https?:\/\/[^\s]+$/i
 
