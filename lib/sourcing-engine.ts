@@ -24,13 +24,48 @@ export type SourcingImage = { media_type: UploadImageMime; data: string }
 // owns auth, role checks, and the DB write (and the hard validateListing rail);
 // this owns "given the conversation, produce the next turn".
 
-const MAX_CONTINUATIONS = 2
+// One continuation only. Each continuation is a full extra model round-trip;
+// two of them plus tool time was pushing heavy turns past the function ceiling
+// and 504-ing the follow-up turn (mobile, prod).
+const MAX_CONTINUATIONS = 1
 
-// Hard ceiling on one turn's model + tool work. Above observed search-turn
-// latency (~30-60s) with headroom, well under the route's 120s maxDuration —
+// Hard ceiling on one turn's model + tool work. Kept comfortably below the
+// route's 120s maxDuration so the preamble + response serialization still fit —
 // a stuck turn returns a clean message, never a 504 or an indefinite spinner.
 // Overridable via env for tuning without a deploy.
-const ENGINE_TIMEOUT_MS = Number(process.env.SOURCING_TIMEOUT_MS) || 90_000
+const ENGINE_TIMEOUT_MS = Number(process.env.SOURCING_TIMEOUT_MS) || 75_000
+
+/**
+ * The model, on running out of searches mid-turn, tends to narrate the limit
+ * ("I've hit my search limit for this turn", "reply 'go ahead' to continue").
+ * That prose is a Section 21 tone-rail violation and a dead end — the "continue"
+ * turn is the heaviest possible and was 504-ing. If a turn's visible text looks
+ * like this, we drop it and return a clean `exhausted` outcome instead.
+ */
+export function looksLikeSearchLimitNarration(text: string): boolean {
+  return /\b(search|tool)\s*(limit|quota|cap|budget)\b|\bhit (my|the)(?:\s+\w+){0,2}\s*limit\b|\b(used up|ran out of|out of|no more)\s+(my\s+)?searches\b|\bfor this turn\b|\breply (?:back )?(?:with )?["']?go ahead["']?|\bsay ["']?go ahead["']?|\btell me to (?:go on|continue|keep going)\b|\blet me know (?:if|when|and) .{0,40}\b(continue|go on|keep (?:going|looking|searching))\b/i.test(
+    text
+  )
+}
+
+/** True when a server tool (web_search / web_fetch) reported a usage-cap error
+ *  in this response rather than results. */
+function hitToolUsageCap(content: unknown): boolean {
+  if (!Array.isArray(content)) return false
+  return content.some((b) => {
+    const block = b as { type?: string; content?: unknown }
+    if (block?.type !== 'web_search_tool_result' && block?.type !== 'web_fetch_tool_result') {
+      return false
+    }
+    const c = block.content as { error_code?: unknown } | undefined
+    return (
+      !!c &&
+      !Array.isArray(c) &&
+      typeof c === 'object' &&
+      /max_uses|too_many|rate/i.test(String(c.error_code ?? ''))
+    )
+  })
+}
 
 export type Match = { kind?: string; item_id?: string; item_name?: string }
 export type SubmittedResult = {
@@ -44,6 +79,8 @@ export type TurnOutcome =
   | { kind: 'message'; text: string }
   | { kind: 'submit'; submitted: SubmittedResult }
   | { kind: 'timeout' }
+  /** Ran out of searches this pass without landing anything solid. */
+  | { kind: 'exhausted' }
 
 export const SUBMIT_TOOL = {
   name: 'submit_sourcing',
@@ -117,8 +154,8 @@ export const SUBMIT_TOOL = {
   },
 }
 
-export const WEB_SEARCH_TOOL = { type: 'web_search_20260209', name: 'web_search', max_uses: 4 }
-export const WEB_FETCH_TOOL = { type: 'web_fetch_20260209', name: 'web_fetch', max_uses: 3 }
+export const WEB_SEARCH_TOOL = { type: 'web_search_20260209', name: 'web_search', max_uses: 3 }
+export const WEB_FETCH_TOOL = { type: 'web_fetch_20260209', name: 'web_fetch', max_uses: 2 }
 
 function styleLines(style: SourcingStyleContext): string[] {
   const out: string[] = ['', 'Project style profile (the shared direction for the whole project — spec 9.2):']
@@ -195,6 +232,7 @@ export function buildSystemPrompt(
     '- If your searches only return a retailer\'s category, "shop by", keyword, or listing pages (common on Wayfair), use web_fetch to open one of those pages and pull an actual individual product\'s link and price out of it.',
     '- Read each candidate product page. If it shows discontinued, no longer available, out of stock, sold out, or currently unavailable, do not log it — find another.',
     '- A few strong options, not an exhaustive list: one primary plus at most 3 alternatives.',
+    '- You have a small, fixed number of searches per reply. If you use them up before finding solid options, stop and present the best 1 or 2 you have. If nothing is usable, say so plainly and ask one focused question to narrow it — a material, a size range, or a store. Never mention search limits, quotas, or "this turn", and never ask the user to tell you to keep going. Just work with what you found.',
     '- Give width, depth, height in inches for the primary ONLY if the page states them. Use 0 otherwise. Never estimate dimensions. Never invent a price or a link.',
     '',
     'Presenting and logging:',
@@ -271,7 +309,9 @@ export async function runSourcingTurn(opts: {
     },
   ]
   const messages: Anthropic.MessageParam[] = buildSourcingMessages(opts.messages, styleImages)
-  const common = { model, max_tokens: 8192, system, output_config: { effort: 'medium' } } as const
+  // A sourcing reply is a short list of options or one clarifying question —
+  // 2048 is plenty and keeps generation time (and turn latency) down.
+  const common = { model, max_tokens: 2048, system, output_config: { effort: 'medium' } } as const
 
   const controller = new AbortController()
   let aborted = false
@@ -335,7 +375,17 @@ export async function runSourcingTurn(opts: {
       if (toolUse) return { kind: 'submit', submitted: toolUse.input as SubmittedResult }
 
       // Plain reply — conversational turn (with or without a search this turn).
-      return { kind: 'message', text: assistantText(response.content) || FALLBACK_MESSAGE }
+      const text = assistantText(response.content)
+
+      // Ran out of searches and the model is narrating the limit / asking to be
+      // told to continue: drop that prose and hand back a clean status instead.
+      if (looksLikeSearchLimitNarration(text)) return { kind: 'exhausted' }
+      // Or it hit a tool cap and had almost nothing to show for it.
+      if (hitToolUsageCap(response.content) && text.length < 140 && !/https?:\/\//.test(text)) {
+        return { kind: 'exhausted' }
+      }
+
+      return { kind: 'message', text: text || FALLBACK_MESSAGE }
     }
     return { kind: 'timeout' }
   } catch (err) {

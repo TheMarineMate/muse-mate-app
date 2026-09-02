@@ -191,6 +191,12 @@ export async function POST(req: Request): Promise<NextResponse<SourcingApiRespon
       text: 'That search took a while and I came up empty. Try narrowing it down — a material, a size, or a specific retailer.',
     })
   }
+  if (turn.kind === 'exhausted') {
+    return NextResponse.json<SourcingApiResponse>({
+      kind: 'no_match',
+      text: "I went through this pass without landing solid options. Narrow it a little — a material, a size range, or a specific store — and send again.",
+    })
+  }
   if (turn.kind === 'message') {
     return NextResponse.json<SourcingApiResponse>({ kind: 'message', text: turn.text })
   }

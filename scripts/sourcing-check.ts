@@ -11,6 +11,7 @@ import { computeBudgetRollup, describeBudgetForPrompt } from '../lib/budget.ts'
 import {
   buildSourcingMessages,
   buildSystemPrompt,
+  looksLikeSearchLimitNarration,
   type SourcingStyleContext,
 } from '../lib/sourcing-engine.ts'
 
@@ -218,6 +219,59 @@ check('messages: image block first, base64 jpeg', first[0].type === 'image' && f
 check('messages: text block after image, with a cache breakpoint', first[1].type === 'text' && first[1].text === 'something for the reading corner' && !!first[1].cache_control)
 check('messages: assistant + later user turns stay plain strings', mapped[1].content === 'what kind of chair?' && mapped[2].content === 'an accent chair')
 check('messages: no images -> all plain strings', buildSourcingMessages([{ role: 'user', content: 'hi' }]).every((m) => typeof m.content === 'string'))
+
+// --- search-cap degradation (prod bug: raw limit-narration leaked to user) ---
+
+check(
+  'limit-narration: catches "hit my search limit for this turn"',
+  looksLikeSearchLimitNarration("I've hit my search limit for this turn.")
+)
+check(
+  'limit-narration: catches "reply with \'go ahead\'"',
+  looksLikeSearchLimitNarration("Reply with 'go ahead' and I'll keep looking.")
+)
+check(
+  'limit-narration: catches "say go ahead"',
+  looksLikeSearchLimitNarration('Say go ahead to continue searching.')
+)
+check(
+  'limit-narration: catches "used up my searches"',
+  looksLikeSearchLimitNarration('I used up my searches before finding a match.')
+)
+check(
+  'limit-narration: catches "let me know if you want me to continue"',
+  looksLikeSearchLimitNarration('Let me know if you want me to continue looking.')
+)
+check(
+  'limit-narration: catches "tell me to keep going"',
+  looksLikeSearchLimitNarration('Just tell me to keep going.')
+)
+check(
+  'limit-narration: does NOT fire on a normal options reply',
+  !looksLikeSearchLimitNarration(
+    'Here are 3 options: 1. Oak console from West Elm, $499. 2. Walnut console from CB2, $599. Which should I log?'
+  )
+)
+check(
+  'limit-narration: does NOT fire on a normal clarifying question',
+  !looksLikeSearchLimitNarration('Do you want leather or fabric, and roughly what width?')
+)
+check(
+  'limit-narration: does NOT fire on "no strong match, want me to try another store"',
+  !looksLikeSearchLimitNarration(
+    "I didn't find a solid match at that price. Want me to try a different store?"
+  )
+)
+
+const capPrompt = buildSystemPrompt('Living room', null, [])
+check(
+  'system prompt: tells the model to stop and present what it has when searches run out',
+  /small, fixed number of searches per reply[\s\S]*Never mention search limits/i.test(capPrompt)
+)
+check(
+  'system prompt: forbids asking the user to say keep going',
+  /never ask the user to tell you to keep going/i.test(capPrompt)
+)
 
 console.log(`\n${fail === 0 ? 'SOURCING + PROMPT CHECK PASSED' : 'SOURCING + PROMPT CHECK FAILED'} (${pass} passed, ${fail} failed)`)
 process.exit(fail === 0 ? 0 : 1)

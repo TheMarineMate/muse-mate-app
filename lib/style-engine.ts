@@ -15,12 +15,13 @@ export type StyleTurnMessage =
 // call. Sibling of lib/sourcing-engine.ts; the route owns auth, role checks,
 // the rails in lib/style.ts, and the DB write.
 
-const MAX_CONTINUATIONS = 2
+// One continuation only — a second full round-trip plus tool time pushes heavy
+// turns toward the function ceiling (mirrors the sourcing-engine fix).
+const MAX_CONTINUATIONS = 1
 
-// Hard ceiling on one turn's model + tool work. Search turns pulling visual
-// references run long; this keeps a stuck turn returning a clean message rather
-// than an indefinite spinner. Overridable via env for tuning without a deploy.
-const ENGINE_TIMEOUT_MS = Number(process.env.STYLE_TIMEOUT_MS) || 90_000
+// Hard ceiling on one turn's model + tool work. Kept well below the route's
+// 120s maxDuration so the preamble + response still fit. Overridable via env.
+const ENGINE_TIMEOUT_MS = Number(process.env.STYLE_TIMEOUT_MS) || 75_000
 
 export type StyleTurnOutcome =
   | { kind: 'message'; text: string }
@@ -94,8 +95,8 @@ export const CONFIRM_TOOL = {
   },
 }
 
-export const WEB_SEARCH_TOOL = { type: 'web_search_20260209', name: 'web_search', max_uses: 4 }
-export const WEB_FETCH_TOOL = { type: 'web_fetch_20260209', name: 'web_fetch', max_uses: 3 }
+export const WEB_SEARCH_TOOL = { type: 'web_search_20260209', name: 'web_search', max_uses: 3 }
+export const WEB_FETCH_TOOL = { type: 'web_fetch_20260209', name: 'web_fetch', max_uses: 2 }
 
 export type StyleContext = {
   projectName: string
@@ -130,6 +131,7 @@ export function buildStyleSystemPrompt(ctx: StyleContext): string {
     '- Ask about mood and function first. One or two focused questions per turn, not a questionnaire dump.',
     '- Capture shopping preferences as they come up, the same as aesthetic ones: whether they lean toward one-of-a-kind / handmade / specialty pieces over big-box, and how deal-sensitive they are (always hunt for a current sale vs. fit matters more than price). These are standing preferences for the whole project.',
     '- When it would genuinely help, use web_search (and web_fetch to open a page) to pull real visual references — actual images or articles that exist. Never describe or link a reference you did not retrieve. A category page, a lookbook, or a blog post is fine here; it just has to be real.',
+    '- Searches per reply are limited. If they run out, just carry on the conversation with what you have. Never mention search limits or quotas, and never ask the user to tell you to keep going.',
     '- The user may attach photos. Look at them as visual references for the vibe — the space as it is now, a piece they love, a mood shot. Read them for mood, palette, materials, light. They are never products to price or source.',
     '- Keep replies conversational and short. No em dashes, no rule-of-three lists, no "I would be happy to", no restating what they just said back to them.',
     '- Stay on the vibe. Do not price-shop specific products, do not claim to add anything to a room list or a budget, do not comment on their taste unprompted. Finding a specific product to buy is the room conversation\'s job, not this one.',
@@ -195,7 +197,7 @@ export async function runStyleTurn(opts: {
     },
   ]
   const messages: Anthropic.MessageParam[] = buildTurnMessages(opts.messages)
-  const common = { model, max_tokens: 8192, system, output_config: { effort: 'medium' } } as const
+  const common = { model, max_tokens: 4096, system, output_config: { effort: 'medium' } } as const
 
   const controller = new AbortController()
   let aborted = false

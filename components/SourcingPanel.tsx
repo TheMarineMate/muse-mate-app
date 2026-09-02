@@ -16,6 +16,60 @@ const WAIT_MESSAGES = [
   'Still going…',
 ]
 
+// A bit above the server route's 120s maxDuration, so a genuinely hung request
+// fails with a clear message instead of spinning forever on mobile.
+const CLIENT_TIMEOUT_MS = 125_000
+
+/**
+ * POST a sourcing turn and always resolve to a SourcingApiResponse — never
+ * throw. A timed-out or 5xx function on Vercel comes back as a non-JSON body,
+ * so parse defensively and turn each failure mode into an honest, recoverable
+ * message rather than a bare "Network error".
+ */
+async function postSourcing(body: {
+  roomId: string
+  messages: ConversationMessage[]
+  targetItemId: string | null
+}): Promise<SourcingApiResponse> {
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), CLIENT_TIMEOUT_MS)
+  try {
+    const res = await fetch('/api/sourcing', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: ctrl.signal,
+    })
+    const raw = await res.text()
+    let parsed: unknown = null
+    try {
+      parsed = raw ? JSON.parse(raw) : null
+    } catch {
+      parsed = null
+    }
+    if (parsed && typeof parsed === 'object' && 'kind' in parsed) {
+      return parsed as SourcingApiResponse
+    }
+    if (res.status === 504 || res.status === 408 || res.status === 502) {
+      return {
+        kind: 'no_match',
+        text: 'That one ran long and timed out before it finished. Narrow it — a material, a size, or a specific store — and send again.',
+      }
+    }
+    return { kind: 'error', text: 'Something went wrong on that request. Try again.' }
+  } catch (err) {
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      return {
+        kind: 'no_match',
+        text: "That search is taking longer than it should. Try again, or narrow it down and I'll be quicker.",
+      }
+    }
+    return { kind: 'error', text: "Couldn't reach the server. Check your connection and try again." }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 // Ephemeral (spec Section 5): the transcript lives only in this component's
 // state and is re-sent each turn. Nothing is persisted but the item record.
 type Entry =
@@ -110,27 +164,20 @@ export function SourcingPanel({
     setBusy(true)
     scrollToEnd()
 
-    const messages: ConversationMessage[] = nextEntries.map((entry) =>
-      entry.role === 'user'
-        ? { role: 'user', content: entry.text }
-        : { role: 'assistant', content: entry.result.text }
-    )
+    // Don't feed a prior failure notice back to the model as conversation.
+    const messages: ConversationMessage[] = nextEntries
+      .filter((entry) => !(entry.role === 'assistant' && entry.result.kind === 'error'))
+      .map((entry) =>
+        entry.role === 'user'
+          ? { role: 'user', content: entry.text }
+          : { role: 'assistant', content: entry.result.text }
+      )
 
-    let result: SourcingApiResponse
-    try {
-      const res = await fetch('/api/sourcing', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          roomId,
-          messages,
-          targetItemId: target === 'auto' ? null : target,
-        }),
-      })
-      result = (await res.json()) as SourcingApiResponse
-    } catch {
-      result = { kind: 'error', text: 'Network error. Try again.' }
-    }
+    const result = await postSourcing({
+      roomId,
+      messages,
+      targetItemId: target === 'auto' ? null : target,
+    })
 
     setEntries((prev) => [...prev, { role: 'assistant', result }])
     setBusy(false)

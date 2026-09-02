@@ -27,6 +27,52 @@ const WAIT_MESSAGES = [
   'Still going…',
 ]
 
+// A bit above the route's 120s maxDuration, so a hung request fails clearly
+// instead of spinning forever on mobile.
+const CLIENT_TIMEOUT_MS = 125_000
+
+/**
+ * POST a style-chat turn and always resolve to a StyleChatApiResponse — never
+ * throw. A timed-out or 5xx Vercel function returns a non-JSON body, so parse
+ * defensively and turn each failure mode into an honest, recoverable message.
+ */
+async function postStyleChat(
+  projectId: string,
+  messages: StyleChatMessage[]
+): Promise<StyleChatApiResponse> {
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), CLIENT_TIMEOUT_MS)
+  try {
+    const res = await fetch('/api/style-chat', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ projectId, messages }),
+      signal: ctrl.signal,
+    })
+    const raw = await res.text()
+    let parsed: unknown = null
+    try {
+      parsed = raw ? JSON.parse(raw) : null
+    } catch {
+      parsed = null
+    }
+    if (parsed && typeof parsed === 'object' && 'kind' in parsed) {
+      return parsed as StyleChatApiResponse
+    }
+    if (res.status === 504 || res.status === 408 || res.status === 502) {
+      return { kind: 'message', text: 'That took too long to come back. Try that again.' }
+    }
+    return { kind: 'error', text: 'Something went wrong on that request. Try again.' }
+  } catch (err) {
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      return { kind: 'message', text: 'That took longer than it should have. Try again.' }
+    }
+    return { kind: 'error', text: "Couldn't reach the server. Check your connection and try again." }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 // A photo the current (unsent) turn has attached. It's already uploaded and
 // persisted as a style_references row (spec 9.4) — `refId` lets us undo that if
 // the user removes it before sending.
@@ -205,34 +251,27 @@ export function StyleChatPanel({
 
     const attachments = pending.map((p) => p.key)
     const previews = pending.map((p) => p.previewUrl)
-    const nextEntries: Entry[] = [...entries, { role: 'user', text, images: previews }]
+    const submitted: Entry = { role: 'user', text, images: previews }
+    const nextEntries: Entry[] = [...entries, submitted]
     setEntries(nextEntries)
     setInput('')
     setPending([])
     setBusy(true)
     scrollToEnd()
 
-    const messages: StyleChatMessage[] = nextEntries.map((entry, i) => {
-      if (entry.role === 'assistant') return { role: 'assistant', content: entry.result.text }
-      const isLast = i === nextEntries.length - 1
-      return {
-        role: 'user',
-        content: entry.text,
-        ...(isLast && attachments.length > 0 ? { attachments } : {}),
-      }
-    })
-
-    let result: StyleChatApiResponse
-    try {
-      const res = await fetch('/api/style-chat', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ projectId, messages }),
+    const messages: StyleChatMessage[] = nextEntries
+      // Don't feed a prior failure notice back to the model as conversation.
+      .filter((entry) => !(entry.role === 'assistant' && entry.result.kind === 'error'))
+      .map((entry) => {
+        if (entry.role === 'assistant') return { role: 'assistant', content: entry.result.text }
+        return {
+          role: 'user',
+          content: entry.text,
+          ...(entry === submitted && attachments.length > 0 ? { attachments } : {}),
+        }
       })
-      result = (await res.json()) as StyleChatApiResponse
-    } catch {
-      result = { kind: 'error', text: 'Network error. Try again.' }
-    }
+
+    const result = await postStyleChat(projectId, messages)
 
     setEntries((prev) => [...prev, { role: 'assistant', result }])
     setBusy(false)
