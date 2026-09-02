@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>The Muse Mate — brand assets</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --cream: #FBF9F5;
+    --ink: #1F2D2B;
+    --ink-soft: #5B6664;
+    --line: #E4E0D6;
+    --card: #FFFFFF;
+    --teal: #2E9E8F;
+    --navy: #1B3A5C;
+    --navy-dark: #7FA8CC;
+    --orange: #D97A4E;
+    --orange-cta: #B85E32;
+    --success: #186B5B;
+    --warning: #8A5A0B;
+    --danger: #A3341F;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;
+    background:var(--cream);
+    color:var(--ink);
+    font-family:'Inter',sans-serif;
+    line-height:1.5;
+  }
+  .wrap{max-width:920px; margin:0 auto; padding:64px 24px 120px;}
+  header{margin-bottom:56px;}
+  .eyebrow{font-size:13px; color:var(--ink-soft); margin:0 0 6px;}
+  h1{font-family:'Fraunces',serif; font-weight:500; font-size:36px; margin:0 0 8px; letter-spacing:-0.01em;}
+  header p{color:var(--ink-soft); font-size:15px; max-width:52ch; margin:0;}
+
+  section{margin-bottom:56px;}
+  h2{font-family:'Fraunces',serif; font-weight:500; font-size:20px; margin:0 0 4px;}
+  .section-note{color:var(--ink-soft); font-size:13px; margin:0 0 20px;}
+
+  .grid{display:grid; grid-template-columns:repeat(auto-fill, minmax(150px,1fr)); gap:12px;}
+
+  .tile{
+    background:var(--card);
+    border:1px solid var(--line);
+    border-radius:14px;
+    padding:20px 16px 16px;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    gap:12px;
+  }
+  .tile.dark{background:var(--ink); border-color:var(--ink);}
+  .tile-preview{display:flex; align-items:center; justify-content:center; height:64px;}
+  .tile-label{font-size:12px; color:var(--ink-soft); text-align:center;}
+  .tile.dark .tile-label{color:#A9B3B1;}
+
+  button.dl{
+    appearance:none;
+    border:1px solid var(--line);
+    background:transparent;
+    color:var(--ink);
+    font-family:'Inter',sans-serif;
+    font-size:12px;
+    font-weight:500;
+    padding:6px 12px;
+    border-radius:8px;
+    cursor:pointer;
+    transition:background 0.15s ease;
+  }
+  button.dl:hover{background:var(--cream);}
+  .tile.dark button.dl{border-color:#3A4644; color:#F2EFE8;}
+  .tile.dark button.dl:hover{background:#2A3836;}
+
+  .lockup-card{
+    background:var(--card);
+    border:1px solid var(--line);
+    border-radius:14px;
+    padding:24px;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:16px;
+    margin-bottom:12px;
+  }
+  .lockup-card.dark{background:var(--ink);}
+  .lockup-row{display:flex; align-items:center; gap:14px;}
+  .wordmark{font-family:'Fraunces',serif; font-weight:500; font-size:22px; color:var(--ink);}
+  .lockup-card.dark .wordmark{color:#FFFFFF;}
+
+  .swatch-grid{display:grid; grid-template-columns:repeat(auto-fill, minmax(130px,1fr)); gap:12px;}
+  .swatch{
+    background:var(--card);
+    border:1px solid var(--line);
+    border-radius:12px;
+    overflow:hidden;
+    cursor:pointer;
+  }
+  .swatch-color{height:56px;}
+  .swatch-info{padding:10px 12px;}
+  .swatch-name{font-size:12px; font-weight:500; margin:0 0 2px;}
+  .swatch-hex{font-size:11px; color:var(--ink-soft); margin:0; font-family:monospace;}
+  .swatch-role{font-size:10px; color:var(--ink-soft); margin:2px 0 0;}
+
+  .copied-toast{
+    position:fixed;
+    bottom:24px;
+    left:50%;
+    transform:translateX(-50%) translateY(20px);
+    background:var(--ink);
+    color:#FFF;
+    padding:10px 18px;
+    border-radius:24px;
+    font-size:13px;
+    opacity:0;
+    pointer-events:none;
+    transition:opacity 0.2s ease, transform 0.2s ease;
+  }
+  .copied-toast.show{opacity:1; transform:translateX(-50%) translateY(0);}
+
+  footer{color:var(--ink-soft); font-size:12px; padding-top:24px; border-top:1px solid var(--line);}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+  <header>
+    <p class="eyebrow">Brand assets</p>
+    <h1>The Muse Mate</h1>
+    <p>Every mark, lockup, and color in the system, ready to download. SVGs stay crisp at any size — use the size shown as a guide for where each asset fits (favicon, app icon, nav bar, print).</p>
+  </header>
+
+  <section>
+    <h2>Primary mark, on light</h2>
+    <p class="section-note">Full mark with the up-glow. Use for app icons, splash screens, and anywhere the mark stands alone on a white or cream background.</p>
+    <div class="grid" id="mark-light-grid"></div>
+  </section>
+
+  <section>
+    <h2>Primary mark, on dark</h2>
+    <p class="section-note">Lightened navy and teal for contrast against dark surfaces. Same rule applies to any future dark-mode color — lighten, don't reuse the light-mode value.</p>
+    <div class="grid" id="mark-dark-grid"></div>
+  </section>
+
+  <section>
+    <h2>Icon only, no glow</h2>
+    <p class="section-note">For small sizes where the glow adds noise rather than lift — favicons, browser tabs, list rows.</p>
+    <div class="grid" id="icon-flat-grid"></div>
+  </section>
+
+  <section>
+    <h2>Wordmark lockups</h2>
+    <p class="section-note">"The Muse Mate" set in Fraunces, paired with the mark. Use the horizontal lockup wherever there's room; the mark can be used alone once it's established on a screen.</p>
+
+    <div class="lockup-card" id="lockup-light"></div>
+    <div class="lockup-card dark" id="lockup-dark"></div>
+  </section>
+
+  <section>
+    <h2>Color palette</h2>
+    <p class="section-note">Click any swatch to copy its hex value.</p>
+    <div class="swatch-grid" id="palette-grid"></div>
+  </section>
+
+  <footer>The Muse Mate brand system — mark, palette, and typography as decided. Fraunces for the wordmark and headers, Inter (or the platform's existing UI sans) for interface text.</footer>
+
+</div>
+
+<div class="copied-toast" id="toast">Copied</div>
+
+<script>
+// ---- SVG builders ----
+
+function markSVG({withGlow, dark}) {
+  const navy = dark ? '#7FA8CC' : '#1B3A5C';
+  const teal = dark ? '#54C4B4' : '#2E9E8F';
+  const orange = dark ? '#E8956B' : '#D97A4E';
+  const glow = withGlow ? `
+    <defs><radialGradient id="g" cx="65%" cy="30%" r="55%">
+      <stop offset="0%" stop-color="${dark ? '#3A4038' : '#FFE9DC'}" stop-opacity="${dark ? '0.5' : '0.9'}"/>
+      <stop offset="100%" stop-color="${dark ? '#3A4038' : '#FFE9DC'}" stop-opacity="0"/>
+    </radialGradient></defs>
+    <circle cx="38" cy="24" r="24" fill="url(#g)"/>` : '';
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 60 60">
+    ${glow}
+    <rect x="9" y="30" width="18" height="12" rx="3" fill="${navy}" transform="rotate(-6 9 30)"/>
+    <rect x="16" y="21" width="24" height="16" rx="4" fill="${teal}" transform="rotate(4 16 21)"/>
+    <rect x="24" y="9" width="30" height="19" rx="4" fill="${orange}" transform="rotate(-3 24 9)"/>
+  </svg>`;
+}
+
+function lockupSVG({dark}) {
+  const mark = markSVG({withGlow:true, dark});
+  return mark;
+}
+
+// ---- Download helper ----
+function download(filename, svgString) {
+  const blob = new Blob([svgString], {type:'image/svg+xml'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+// ---- Build mark grids ----
+function buildMarkGrid(containerId, {withGlow, dark, prefix}) {
+  const sizes = [512, 192, 64, 32];
+  const container = document.getElementById(containerId);
+  sizes.forEach(size => {
+    const svg = markSVG({withGlow, dark});
+    const tile = document.createElement('div');
+    tile.className = 'tile' + (dark ? ' dark' : '');
+    const previewSize = Math.min(size, 64);
+    tile.innerHTML = `
+      <div class="tile-preview" style="width:${previewSize}px; height:${previewSize}px;">${svg}</div>
+      <p class="tile-label">${size}\u00d7${size}px</p>
+      <button class="dl">Download SVG</button>
+    `;
+    tile.querySelector('button').addEventListener('click', () => {
+      const sized = svg.replace('<svg ', `<svg width="${size}" height="${size}" `);
+      download(`${prefix}-${size}.svg`, sized);
+    });
+    container.appendChild(tile);
+  });
+}
+
+buildMarkGrid('mark-light-grid', {withGlow:true, dark:false, prefix:'muse-mate-mark-light'});
+buildMarkGrid('mark-dark-grid', {withGlow:true, dark:true, prefix:'muse-mate-mark-dark'});
+
+// flat icon grid (no glow), light + dark side by side
+(function buildFlatGrid(){
+  const sizes = [64, 32, 16];
+  const container = document.getElementById('icon-flat-grid');
+  sizes.forEach(size => {
+    [false, true].forEach(dark => {
+      const svg = markSVG({withGlow:false, dark});
+      const tile = document.createElement('div');
+      tile.className = 'tile' + (dark ? ' dark' : '');
+      const previewSize = Math.min(size, 48);
+      tile.innerHTML = `
+        <div class="tile-preview" style="width:${previewSize}px; height:${previewSize}px;">${svg}</div>
+        <p class="tile-label">${size}\u00d7${size}px ${dark ? '· dark' : '· light'}</p>
+        <button class="dl">Download SVG</button>
+      `;
+      tile.querySelector('button').addEventListener('click', () => {
+        const sized = svg.replace('<svg ', `<svg width="${size}" height="${size}" `);
+        download(`muse-mate-icon-${dark?'dark':'light'}-${size}.svg`, sized);
+      });
+      container.appendChild(tile);
+    });
+  });
+})();
+
+// ---- Wordmark lockups ----
+function buildLockup(containerId, dark) {
+  const container = document.getElementById(containerId);
+  const svg = lockupSVG({dark});
+  const textColor = dark ? '#FFFFFF' : '#1F2D2B';
+  container.innerHTML = `
+    <div class="lockup-row">
+      <div style="width:36px; height:36px;">${svg}</div>
+      <span class="wordmark">The Muse Mate</span>
+    </div>
+    <button class="dl" id="dl-${containerId}">Download SVG</button>
+  `;
+  document.getElementById(`dl-${containerId}`).addEventListener('click', () => {
+    const full = `<svg xmlns="http://www.w3.org/2000/svg" width="360" height="60" viewBox="0 0 360 60">
+      <rect width="360" height="60" fill="${dark ? '#1F2D2B' : 'none'}"/>
+      <g transform="translate(4,0)">${svg.replace(/<\/?svg[^>]*>/g,'')}</g>
+      <text x="76" y="38" font-family="Fraunces, serif" font-weight="500" font-size="26" fill="${textColor}">The Muse Mate</text>
+    </svg>`;
+    download(`muse-mate-wordmark-${dark ? 'dark' : 'light'}.svg`, full);
+  });
+}
+buildLockup('lockup-light', false);
+buildLockup('lockup-dark', true);
+
+// ---- Palette ----
+const palette = [
+  {name:'Teal', hex:'#2E9E8F', role:'primary'},
+  {name:'Burnt orange', hex:'#D97A4E', role:'accent / mark'},
+  {name:'CTA orange', hex:'#B85E32', role:'buttons w/ white text'},
+  {name:'Navy', hex:'#1B3A5C', role:'mark, light mode'},
+  {name:'Navy (dark mode)', hex:'#7FA8CC', role:'mark, dark mode'},
+  {name:'Success', hex:'#186B5B', role:'status'},
+  {name:'Warning', hex:'#8A5A0B', role:'status'},
+  {name:'Danger', hex:'#A3341F', role:'status'},
+  {name:'Ink', hex:'#1F2D2B', role:'text, dark surfaces'},
+  {name:'Cream', hex:'#FBF9F5', role:'page background'},
+];
+
+const paletteGrid = document.getElementById('palette-grid');
+palette.forEach(c => {
+  const el = document.createElement('div');
+  el.className = 'swatch';
+  el.innerHTML = `
+    <div class="swatch-color" style="background:${c.hex};"></div>
+    <div class="swatch-info">
+      <p class="swatch-name">${c.name}</p>
+      <p class="swatch-hex">${c.hex}</p>
+      <p class="swatch-role">${c.role}</p>
+    </div>
+  `;
+  el.addEventListener('click', () => {
+    navigator.clipboard.writeText(c.hex);
+    const toast = document.getElementById('toast');
+    toast.textContent = `Copied ${c.hex}`;
+    toast.classList.add('show');
+    setTimeout(() => toast.classList.remove('show'), 1400);
+  });
+  paletteGrid.appendChild(el);
+});
+</script>
+
+</body>
+</html>

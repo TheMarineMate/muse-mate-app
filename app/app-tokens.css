@@ -1,28 +1,55 @@
 /*
  * Muse Mate app-level tokens.
  *
- * The platform palette and the semantic status triplets (success, warning,
- * info, destructive) come from @intelligent-mate/ui/tokens.css. This sheet adds
- * only what the package does not provide and MUST be imported after it.
+ * The platform surfaces, text, border, and semantic status triplets come from
+ * @intelligent-mate/ui/tokens.css. This sheet adds Muse Mate's own values and
+ * MUST be imported after the package sheet so these win by source order.
+ *
+ * Colours here are the confirmed brand system (see design/muse-mate-brand-
+ * assets.html — the markSVG() colours and the `palette` array). Nothing outside
+ * this file hardcodes a brand hex; components reference the tokens below.
+ * Section 18: light values on :root, dark values redefined under both the
+ * explicit [data-theme="dark"] and the prefers-color-scheme fallback.
  */
 
 :root {
-  /* --- Product accent (Section 2). Placeholder value pending design review.
-     This is the ONLY place the Muse accent hex is written — everything else
-     references var(--accent-product). --- */
-  --accent-product: #a9835c;
-  --accent-product-hover: #8f6c49;
+  /* --- Product accent -------------------------------------------------------
+     `--accent-product` drives the @intelligent-mate/ui primary button fill,
+     the secondary button outline/text, and focus rings. Brand "CTA orange"
+     (palette role: "buttons w/ white text"). White on #B85E32 clears 4.5:1,
+     so this value is deliberately held stable across themes — the brand
+     sheet's "lighten for dark" rule is about the mark, which carries no text.
+     Only the hover state shifts per theme. --- */
+  --accent-product: #b85e32;
+  --accent-product-hover: #9e4e27;
   --accent-product-contrast: #ffffff;
 
-  /* --- Grounding nav. Section 2: the bottom nav stays dark navy in BOTH
-     themes, so these are deliberately not overridden under [data-theme]. --- */
-  --nav-bg: #0f1f3d;
-  --nav-text: #ffffff;
-  --nav-text-muted: #9aa4b8;
+  /* --- Grounding nav. Section 2: stays dark in BOTH themes, so not overridden
+     below. Brand Navy bar, Cream text. --- */
+  --nav-bg: #1b3a5c;
+  --nav-text: #fbf9f5;
+  --nav-text-muted: #93aec6;
 
-  /* --- Typography (system stack, no web fonts on first paint) --- */
+  /* --- Brand mark colours (consumed by <Mark />). These DO shift per theme,
+     the same way the brand sheet lightens navy/teal/orange on dark. --- */
+  --brand-navy: #1b3a5c;
+  --brand-teal: #2e9e8f;
+  --brand-orange: #d97a4e;
+  --brand-glow: #ffe9dc;
+
+  /* --- Brand reference values (static) ---
+     Teal is the primary brand colour; Ink/Cream are the brand neutrals. Not
+     wired into components yet — available for a later pass. --- */
+  --brand-ink: #1f2d2b;
+  --brand-cream: #fbf9f5;
+
+  /* --- Typography ---
+     System sans for body/UI. Fraunces (loaded via next/font, exposed as
+     --font-display on <html>) for the wordmark and page headers only. --- */
   --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial,
     sans-serif;
+  --font-serif: var(--font-display), 'Iowan Old Style', 'Palatino Linotype', Palatino,
+    Georgia, 'Times New Roman', serif;
   --text-xs: 0.75rem;
   --text-sm: 0.875rem;
   --text-base: 1rem;
@@ -42,4 +69,30 @@
   /* --- Layout --- */
   --nav-height: 56px;
   --content-max: 720px;
+}
+
+/* --- Dark theme (explicit toggle) --------------------------------------- */
+:root[data-theme='dark'] {
+  --accent-product: #b85e32;
+  --accent-product-hover: #c96a3b;
+  --accent-product-contrast: #ffffff;
+
+  --brand-navy: #7fa8cc;
+  --brand-teal: #54c4b4;
+  --brand-orange: #e8956b;
+  --brand-glow: #3a4038;
+}
+
+/* --- Dark theme (system preference, only when no explicit light choice) --- */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --accent-product: #b85e32;
+    --accent-product-hover: #c96a3b;
+    --accent-product-contrast: #ffffff;
+
+    --brand-navy: #7fa8cc;
+    --brand-teal: #54c4b4;
+    --brand-orange: #e8956b;
+    --brand-glow: #3a4038;
+  }
 }

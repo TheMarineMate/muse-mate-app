@@ -20,7 +20,9 @@ export function PaletteEditor({
   onChange: (next: PaletteEntry[]) => void
 }) {
   const [adding, setAdding] = useState(false)
-  const [hex, setHex] = useState('#A9835C')
+  // Starter value only — a brand tone (burnt orange). The user picks the real
+  // colour; nothing here feeds the theme system.
+  const [hex, setHex] = useState('#D97A4E')
   const [label, setLabel] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
