@@ -20,7 +20,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.104.2",
     "@ducanh2912/next-pwa": "^10.2.9",
-    "@intelligent-mate/ui": "file:../../intelligent-mate-ui",
+    "@intelligent-mate/ui": "github:TheMarineMate/intelligent-mate-ui",
     "@supabase/ssr": "^0.12.0",
     "@supabase/supabase-js": "^2.108.2",
     "konva": "^9.3.20",
