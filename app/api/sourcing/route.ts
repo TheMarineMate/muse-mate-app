@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { getSupabaseServerClient } from '@/lib/supabase/server'
 import { getAnthropicClient, isAnthropicConfigured, ANTHROPIC_MODEL } from '@/lib/anthropic'
 import { runSourcingTurn } from '@/lib/sourcing-engine'
+import { computeBudgetRollup, describeBudgetForPrompt, type BudgetItem } from '@/lib/budget'
 import {
   composeSourcingNote,
   validateAlternatives,
@@ -89,6 +90,19 @@ export async function POST(req: Request): Promise<NextResponse<SourcingApiRespon
       ? `${Number(room.wall_length)}in x ${Number(room.wall_width)}in`
       : null
 
+  // Project budget context (spec 9.2): the assistant needs to know what's left
+  // to weigh whether a suggestion is affordable. Rollup spans every room.
+  const [{ data: projectRow }, { data: budgetItemRows }] = await Promise.all([
+    supabase.from('projects').select('budget_target').eq('id', room.project_id).maybeSingle(),
+    supabase.from('items').select('price_estimate, status').eq('project_id', room.project_id),
+  ])
+  const budget = describeBudgetForPrompt(
+    computeBudgetRollup(
+      (budgetItemRows ?? []) as BudgetItem[],
+      projectRow?.budget_target ?? null
+    )
+  )
+
   let turn
   try {
     turn = await runSourcingTurn({
@@ -97,6 +111,7 @@ export async function POST(req: Request): Promise<NextResponse<SourcingApiRespon
       roomName: room.name,
       dims,
       items,
+      budget,
       messages,
     })
   } catch (err) {

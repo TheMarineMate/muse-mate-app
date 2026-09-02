@@ -106,7 +106,8 @@ export const WEB_FETCH_TOOL = { type: 'web_fetch_20260209', name: 'web_fetch', m
 export function buildSystemPrompt(
   roomName: string,
   dims: string | null,
-  items: { id: string; name: string; status: string }[]
+  items: { id: string; name: string; status: string }[],
+  budget?: string | null
 ): string {
   const itemLines =
     items.length > 0
@@ -118,6 +119,15 @@ export function buildSystemPrompt(
     `Room: "${roomName}"${dims ? ` (${dims})` : ''}`,
     "Items already on this room's list (id — name (status)):",
     itemLines,
+    // Project budget (spec 9.2) — injected so suggestions can be weighed against
+    // what's actually left. Planned = needed + sourced, committed = ordered.
+    ...(budget
+      ? [
+          '',
+          `Project budget (USD): ${budget}.`,
+          'Keep suggestions realistic against what is left. If an option would push the project over, say so plainly rather than staying quiet.',
+        ]
+      : []),
     '',
     'Conversation:',
     '- If the request is a vibe or underspecified, do NOT search yet. Ask one focused clarifying question, or offer 2 or 3 concrete directions, and wait for a reply.',
@@ -155,9 +165,11 @@ export async function runSourcingTurn(opts: {
   roomName: string
   dims: string | null
   items: { id: string; name: string; status: string }[]
+  /** Project budget context for the system prompt (spec 9.2). */
+  budget?: string | null
   messages: ConversationMessage[]
 }): Promise<TurnOutcome> {
-  const { client, model, roomName, dims, items } = opts
+  const { client, model, roomName, dims, items, budget } = opts
   const tools = [
     WEB_SEARCH_TOOL,
     WEB_FETCH_TOOL,
@@ -170,7 +182,7 @@ export async function runSourcingTurn(opts: {
   const system = [
     {
       type: 'text' as const,
-      text: buildSystemPrompt(roomName, dims, items),
+      text: buildSystemPrompt(roomName, dims, items, budget),
       cache_control: { type: 'ephemeral' as const },
     },
   ]

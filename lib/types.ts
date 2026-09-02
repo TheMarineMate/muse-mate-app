@@ -15,6 +15,8 @@ export type ItemPriority = 'must-have' | 'nice-to-have'
 export type ItemStatus = 'needed' | 'sourced' | 'ordered' | 'received'
 export type ThemePref = 'light' | 'dark'
 export type Wall = 'N' | 'E' | 'S' | 'W'
+/** style_references.kind — uploaded photo, or a real retrieved web image/link. */
+export type StyleReferenceKind = 'uploaded_image' | 'web_image' | 'web_link'
 
 // --- JSON column shapes ---
 
@@ -43,8 +45,31 @@ export type Project = {
   vibe_notes: string | null
   palette: PaletteEntry[]
   budget_target: number | null
+  /** Phase 6 — confirmed mood/descriptor summary from the style-intake chat. */
+  style_summary: string | null
+  /** Set/refreshed each time the user confirms the profile (additive, not a lock). */
+  style_confirmed_at: string | null
+  /** Shopping preference: handmade/one-of-a-kind lean vs mass-market. */
+  prefers_unique: boolean | null
+  /** Shopping preference: actively check current sales / promo codes. */
+  deal_sensitive: boolean | null
   created_at: string
   updated_at: string
+}
+
+/** Phase 6 (spec 9.3) — a persisted visual reference for the project's vibe.
+ *  Exactly one of storage_path / url is set, matching `kind` (DB CHECK). */
+export type StyleReference = {
+  id: string
+  project_id: string
+  kind: StyleReferenceKind
+  /** kind = 'uploaded_image' — object key in the 'style-references' Storage
+   *  bucket, path '<project_id>/<uuid>.<ext>'. Null for web kinds. */
+  storage_path: string | null
+  /** kind = 'web_image' | 'web_link' — the real retrieved URL. Null for uploads. */
+  url: string | null
+  caption: string | null
+  created_at: string
 }
 
 export type ProjectMember = {

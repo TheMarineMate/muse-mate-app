@@ -167,6 +167,49 @@ try {
     ((await users.outsider.client.from('rooms').select('id').eq('project_id', projectId)).data?.length ?? 0) === 0
   )
 
+  // --- style_references (Phase 6 / migration 006) ----------------------
+  const { data: styleRef, error: styleRefErr } = await users.editor.client
+    .from('style_references')
+    .insert({ project_id: projectId, kind: 'web_link', url: 'https://example.com/mood', caption: 'Warm minimal' })
+    .select()
+    .single()
+  check('editor: INSERT style_references (web_link)', !styleRefErr && styleRef, styleRefErr?.message)
+
+  const { error: styleRefUploadErr } = await users.editor.client
+    .from('style_references')
+    .insert({ project_id: projectId, kind: 'uploaded_image', storage_path: `${projectId}/abc123.jpg` })
+  check('editor: INSERT style_references (uploaded_image w/ storage_path)', !styleRefUploadErr, styleRefUploadErr?.message)
+
+  const { error: styleRefBadKindErr } = await users.editor.client
+    .from('style_references')
+    .insert({ project_id: projectId, kind: 'web_link', storage_path: `${projectId}/x.jpg` }) // url missing, storage_path set
+  check(
+    'style_references CHECK rejects kind/location mismatch',
+    !!styleRefBadKindErr && /style_references_location_matches_kind|violates check/i.test(styleRefBadKindErr.message || ''),
+    styleRefBadKindErr
+  )
+
+  check(
+    'viewer: can SELECT style_references',
+    ((await users.viewer.client.from('style_references').select('id').eq('project_id', projectId)).data?.length ?? 0) >= 1
+  )
+  const { error: viewerStyleRefErr } = await users.viewer.client
+    .from('style_references')
+    .insert({ project_id: projectId, kind: 'web_link', url: 'https://example.com/nope' })
+  check('viewer: INSERT style_references denied at RLS', isRlsDenied(viewerStyleRefErr), viewerStyleRefErr)
+
+  const { data: viewerStyleDel } = await users.viewer.client
+    .from('style_references')
+    .delete()
+    .eq('id', styleRef?.id)
+    .select()
+  check('viewer: DELETE style_references is a no-op (RLS filters the row)', (viewerStyleDel?.length ?? 0) === 0)
+
+  check(
+    'outsider: SELECT style_references returns nothing',
+    ((await users.outsider.client.from('style_references').select('id').eq('project_id', projectId)).data?.length ?? 0) === 0
+  )
+
   // --- Section 28 guards -------------------------------------------------
   const { error: lastOwnerErr } = await users.owner.client
     .from('project_members')

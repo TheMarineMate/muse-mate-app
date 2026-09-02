@@ -7,6 +7,8 @@ import {
   validateAlternatives,
   validateListing,
 } from '../lib/sourcing.ts'
+import { computeBudgetRollup, describeBudgetForPrompt } from '../lib/budget.ts'
+import { buildSystemPrompt } from '../lib/sourcing-engine.ts'
 
 let pass = 0
 let fail = 0
@@ -126,5 +128,40 @@ check('note names the primary + retailer + price', note.includes('Fishbone wall 
 check('note lists alternatives', note.includes('Alternatives:'))
 check('note has no newlines / model prose', !note.includes('\n') && note.length <= 800)
 
-console.log(`\n${fail === 0 ? 'SOURCING RAIL CHECK PASSED' : 'SOURCING RAIL CHECK FAILED'} (${pass} passed, ${fail} failed)`)
+// --- Phase 6a: budget context in the room-chat system prompt (spec 9.2) ------
+
+const items = [
+  { price_estimate: 400, status: 'needed' },
+  { price_estimate: 300, status: 'sourced' },
+  { price_estimate: 1200, status: 'ordered' },
+  { price_estimate: 250, status: 'received' },
+]
+const rollup = computeBudgetRollup(items, 5000)
+check('rollup: planned = needed + sourced', rollup.planned === 700)
+check('rollup: committed = ordered', rollup.committed === 1200)
+check('rollup: received', rollup.received === 250)
+check('rollup: remaining = target - all', rollup.remaining === 5000 - 2150)
+
+const desc = describeBudgetForPrompt(rollup)
+check('describe: names target', !!desc && desc.includes('target $5,000'))
+check('describe: names planned/committed/received', !!desc && desc.includes('planned $700') && desc.includes('committed $1,200') && desc.includes('received $250'))
+check('describe: shows remaining', !!desc && desc.includes('$2,850 left'))
+
+const over = describeBudgetForPrompt(computeBudgetRollup([{ price_estimate: 9000, status: 'ordered' }], 5000))
+check('describe: flags over budget', !!over && over.includes('$4,000 over'))
+
+check('describe: null when no target and no spend', describeBudgetForPrompt(computeBudgetRollup([], null)) === null)
+check(
+  'describe: still reports spend when no target set',
+  describeBudgetForPrompt(computeBudgetRollup([{ price_estimate: 100, status: 'needed' }], null)) ===
+    'no target set, planned $100, committed $0, received $0'
+)
+
+const promptWith = buildSystemPrompt('Living room', '168in x 144in', [], desc)
+check('system prompt: includes the Project budget line when budget given', promptWith.includes('Project budget (USD): target $5,000'))
+check('system prompt: tells the model to flag going over', /push the project over/i.test(promptWith))
+const promptWithout = buildSystemPrompt('Living room', '168in x 144in', [], null)
+check('system prompt: omits the budget section entirely when null', !promptWithout.includes('Project budget'))
+
+console.log(`\n${fail === 0 ? 'SOURCING + PROMPT CHECK PASSED' : 'SOURCING + PROMPT CHECK FAILED'} (${pass} passed, ${fail} failed)`)
 process.exit(fail === 0 ? 0 : 1)
