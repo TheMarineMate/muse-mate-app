@@ -67,6 +67,38 @@ check(
   validateListing({ ...good, url: 'https://www.westelm.com/shop/furniture/browse/' }) === null
 )
 check(
+  'wayfair /sb1/ category page -> null',
+  validateListing({
+    ...good,
+    url: 'https://www.wayfair.com/furniture/sb1/king-size-beds-c46122-a115~128.html',
+  }) === null
+)
+check(
+  'wayfair /sb2/ curated list -> null',
+  validateListing({
+    ...good,
+    url: 'https://www.wayfair.com/furniture/sb2/king-size-solid-wood-beds-c46122-a115~128-a153942~511441.html',
+  }) === null
+)
+check(
+  'wayfair /keyword.php -> null',
+  validateListing({
+    ...good,
+    url: 'https://www.wayfair.com/keyword.php?keyword=wooden+king+size+bed+frames',
+  }) === null
+)
+check(
+  'bare -c<id>.html category suffix -> null',
+  validateListing({ ...good, url: 'https://www.example.com/beds-c12345.html' }) === null
+)
+check(
+  'wayfair /pdp/ product page still passes (no false positive)',
+  validateListing({
+    ...good,
+    url: 'https://www.wayfair.com/furniture/pdp/mercury-row-eefad-solid-wood-king-bed-w001234567.html',
+  }) !== null
+)
+check(
   'real product URL with tracking param still accepted (no false positive)',
   validateListing({
     ...good,

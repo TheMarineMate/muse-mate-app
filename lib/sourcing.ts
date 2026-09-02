@@ -46,6 +46,9 @@ const SEARCH_PAGE_PATTERNS: RegExp[] = [
   /\/b\/ref=/i, // amazon browse node
   /\/gp\/(search|bestsellers|browse|most-wished-for|new-releases)/i, // amazon
   /\/(search|browse|results)(\/|\?|#|$)/i,
+  /\/sb\d\//i, // wayfair "shop by" category pages: /furniture/sb1/, /sb2/
+  /\/keyword\.php/i, // wayfair keyword search
+  /-c\d{3,}(-a[\d~-]+)*\.html($|\?|#)/i, // wayfair category suffix: ...-c46122-a115~128.html
 ]
 
 export function looksLikeSearchOrCategoryPage(url: string): boolean {
