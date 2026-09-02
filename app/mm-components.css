@@ -398,6 +398,56 @@ textarea.mm-control {
   font-size: var(--text-sm);
 }
 
+/* --- Collapsible section (native <details>) ------------------------------- */
+.mm-accordion {
+  border: 1px solid var(--border-color);
+  border-radius: var(--im-radius-lg, 12px);
+  background-color: var(--bg-primary);
+}
+
+.mm-accordion__summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.mm-accordion__summary::-webkit-details-marker {
+  display: none;
+}
+
+.mm-accordion__summary:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--accent-product);
+  border-radius: var(--im-radius-lg, 12px);
+}
+
+.mm-accordion__hint {
+  margin-left: auto;
+}
+
+.mm-accordion__chev {
+  font-size: var(--text-lg);
+  line-height: 1;
+  color: var(--text-muted);
+  transition: transform 0.15s ease;
+}
+
+.mm-accordion[open] .mm-accordion__chev {
+  transform: rotate(180deg);
+}
+
+.mm-accordion[open] .mm-accordion__hint {
+  display: none;
+}
+
+.mm-accordion__body {
+  padding: 0 var(--space-4) var(--space-4);
+}
+
 /* --- Floor plan ------------------------------------------------------- */
 .mm-floorplan__canvas {
   width: 100%;
@@ -475,16 +525,25 @@ textarea.mm-control {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
-  max-height: 360px;
+  /* Give the conversation the bulk of the screen; the floor plan is collapsed
+     by default on this screen so it isn't competing for height. */
+  max-height: min(62vh, 560px);
   overflow-y: auto;
-  padding: var(--space-2) 0 var(--space-4);
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  padding: var(--space-2) var(--space-1) var(--space-4);
   margin-bottom: var(--space-3);
   border-bottom: 1px solid var(--border-color);
+  /* Bottom fade = "there's more below" affordance when the log overflows. */
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 16px), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 16px), transparent);
 }
 
 .mm-sourcing__msg {
   font-size: var(--text-sm);
   line-height: 1.5;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .mm-sourcing__msg--user {
@@ -532,9 +591,55 @@ textarea.mm-control {
 
 .mm-listing__meta {
   display: flex;
-  gap: var(--space-2);
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
   font-size: var(--text-xs);
   color: var(--text-muted);
+}
+
+.mm-listing__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+/* Tappable "View on <retailer>" pill — a real link, styled as a button. */
+.mm-linkpill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px;
+  min-height: 32px;
+  border-radius: 999px;
+  border: 1px solid var(--border-color);
+  background-color: var(--bg-primary);
+  color: var(--accent-product);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  white-space: nowrap;
+  text-decoration: none;
+}
+
+.mm-linkpill:hover {
+  border-color: var(--accent-product);
+}
+
+.mm-listing__log {
+  padding: 6px 12px;
+  min-height: 32px;
+  border: none;
+  border-radius: 999px;
+  background-color: var(--accent-product);
+  color: var(--accent-product-contrast, #ffffff);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.mm-listing__log:hover {
+  background-color: var(--accent-product-hover);
 }
 
 /* No-match: informational, deliberately NOT the error style (spec Section 5) */

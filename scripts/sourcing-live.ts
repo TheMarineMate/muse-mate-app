@@ -22,6 +22,7 @@ import {
   looksLikeSearchOrCategoryPage,
   validateAlternatives,
   validateListing,
+  validateOptions,
   type ConversationMessage,
 } from '../lib/sourcing.ts'
 
@@ -215,6 +216,18 @@ for (const userTurn of turns) {
   if (turn.kind === 'unverified') {
     console.log(`<<< [${secs}s] UNVERIFIED -> no_match (price not confirmed on a fetched page — refused to log)`)
     history.push({ role: 'assistant', content: "Couldn't confirm a price on a real page, so I logged nothing." })
+    continue
+  }
+  if (turn.kind === 'options') {
+    const opts = validateOptions(turn.options)
+    console.log(`<<< [${secs}s] OPTIONS (${opts.length} valid)  reply: ${turn.text}`)
+    opts.forEach((o, i) =>
+      console.log(`    ${i + 1}. ${o.title} — ${o.retailer} $${o.price}  ${o.url}`)
+    )
+    history.push({
+      role: 'assistant',
+      content: turn.text + '\n' + opts.map((o) => `- ${o.title} (${o.retailer}, $${o.price}) ${o.url}`).join('\n'),
+    })
     continue
   }
   if (turn.kind === 'message') {

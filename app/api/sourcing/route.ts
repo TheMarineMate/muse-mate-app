@@ -9,6 +9,7 @@ import {
   composeSourcingNote,
   validateAlternatives,
   validateListing,
+  validateOptions,
   type ConversationMessage,
   type SourcingApiResponse,
 } from '@/lib/sourcing'
@@ -202,6 +203,16 @@ export async function POST(req: Request): Promise<NextResponse<SourcingApiRespon
       kind: 'no_match',
       text: "I found candidates but couldn't open a product page to confirm the price, so I didn't log anything — I won't record a number I can't verify. Try a store whose prices show up in search results, like Target, Walmart, or IKEA.",
     })
+  }
+  if (turn.kind === 'options') {
+    const options = validateOptions(turn.options)
+    if (options.length === 0) {
+      return NextResponse.json<SourcingApiResponse>({
+        kind: 'no_match',
+        text: "I turned up some pages but none held up as a real listing. Narrow it a little and I'll try again.",
+      })
+    }
+    return NextResponse.json<SourcingApiResponse>({ kind: 'options', text: turn.text, options })
   }
   if (turn.kind === 'message') {
     return NextResponse.json<SourcingApiResponse>({ kind: 'message', text: turn.text })

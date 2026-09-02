@@ -6,6 +6,7 @@ import {
   looksLikeSearchOrCategoryPage,
   validateAlternatives,
   validateListing,
+  validateOptions,
 } from '../lib/sourcing.ts'
 import { computeBudgetRollup, describeBudgetForPrompt } from '../lib/budget.ts'
 import {
@@ -291,16 +292,24 @@ check(
   /never ask the user to tell you to keep going/i.test(capPrompt)
 )
 check(
-  'system prompt: pushes a specific first query to avoid wasting the search budget',
-  /Make the first query specific[\s\S]*price ceiling[\s\S]*burns your search budget/i.test(capPrompt)
+  'system prompt: synthesise the query, never pass user phrasing verbatim',
+  /Compose the query yourself from the WHOLE conversation[\s\S]*Never pass the user's words verbatim[\s\S]*wayfair walnut stained wood king bed frame/i.test(
+    capPrompt
+  )
 )
 check(
-  'system prompt: leads with retailers whose search results carry prices',
-  /Lead with retailers whose SEARCH RESULTS carry the price[\s\S]*Amazon, Etsy, IKEA, Target/i.test(capPrompt)
+  'system prompt: still asks for a specific query shape',
+  /Make the query specific[\s\S]*price ceiling/i.test(capPrompt)
 )
 check(
-  'system prompt: names the client-rendered retailers as fetch-unreliable',
-  /Article[\s\S]*render prices client-side[\s\S]*web_fetch on those often comes back empty/i.test(capPrompt)
+  'system prompt: most retailers render client-side, do not count on the fetch',
+  /Most large retailers[\s\S]*render prices client-side[\s\S]*Do not count on the fetch/i.test(capPrompt)
+)
+check(
+  'system prompt: empty fetch -> price is unconfirmed, never say "confirmed"',
+  /if the fetch of that page comes back empty, say the price is unconfirmed[\s\S]*do not write "confirmed"/i.test(
+    capPrompt
+  )
 )
 check(
   'system prompt: an empty web_fetch means the page was NOT read',
@@ -310,6 +319,35 @@ check(
   'system prompt: no repeated queries',
   /Never issue the same query twice/i.test(capPrompt)
 )
+check(
+  'system prompt: present options via the tool, keep the text to 1-2 sentences',
+  /call present_sourcing_options with your 1-3 candidates[\s\S]*NOT in your text[\s\S]*one or two short sentences/i.test(
+    capPrompt
+  )
+)
+check(
+  'system prompt: submit only a page you fetched with the price visible in its text',
+  /a real single-product URL you web_fetch'd this turn, with its price visible in that page's text/i.test(
+    capPrompt
+  )
+)
+
+// --- validateOptions: real-URL cap for presented candidates -----------------
+const rawOpts = [
+  { title: 'Basi King Bed', retailer: 'Article', price_usd: 499, url: 'https://www.article.com/product/25632/basi-king-bed-frame-walnut' },
+  { title: 'dup url', retailer: 'Article', price_usd: 499, url: 'https://www.article.com/product/25632/basi-king-bed-frame-walnut' },
+  { title: 'search page', retailer: 'Amazon', price_usd: 313, url: 'https://www.amazon.com/s?k=walnut+king+bed' },
+  { title: 'no price', retailer: 'Wayfair', price_usd: 0, url: 'https://www.wayfair.com/furniture/pdp/x-w001.html' },
+  { title: 'Real 2', retailer: 'Target', price_usd: 799, url: 'https://www.target.com/p/king-bed/-/A-123' },
+  { title: 'Real 3', retailer: 'IKEA', price_usd: 399, url: 'https://www.ikea.com/us/en/p/tarva-bed-frame-123/' },
+  { title: 'Real 4 over cap', retailer: 'Walmart', price_usd: 289, url: 'https://www.walmart.com/ip/king-bed/456' },
+]
+const opts = validateOptions(rawOpts)
+check('validateOptions: drops dup URL', opts.filter((o) => o.url.includes('25632')).length === 1)
+check('validateOptions: drops a search-results URL', !opts.some((o) => o.url.includes('/s?k=')))
+check('validateOptions: drops a zero-price entry', !opts.some((o) => o.price === 0))
+check('validateOptions: caps at 3 (Section 20 volume cap)', opts.length === 3)
+check('validateOptions: non-array -> []', validateOptions('nope').length === 0 && validateOptions(null).length === 0)
 
 // --- price-provenance rail: a logged price must be on a fetched page ---------
 

@@ -115,9 +115,17 @@ export function FloorPlanSection({
   }
 
   return (
-    <div className="mm-section">
-      <span className="mm-section__title">Floor plan</span>
-
+    <details className="mm-accordion">
+      <summary className="mm-accordion__summary">
+        <span className="mm-section__title">Floor plan</span>
+        <span className="mm-accordion__hint mm-muted">
+          {hasMeasurements ? 'tap to open' : 'needs measurements'}
+        </span>
+        <span className="mm-accordion__chev" aria-hidden>
+          ⌄
+        </span>
+      </summary>
+      <div className="mm-accordion__body">
       {!hasMeasurements ? (
         <Card padding="lg">
           <EmptyState
@@ -209,10 +217,11 @@ export function FloorPlanSection({
       )}
 
       {hasMeasurements && canEdit && (
-        <Card padding="md">
+        <Card padding="md" style={{ marginTop: 'var(--space-3)' }}>
           <OpeningsEditor room={room} onSaved={onRoomChange} />
         </Card>
       )}
-    </div>
+      </div>
+    </details>
   )
 }

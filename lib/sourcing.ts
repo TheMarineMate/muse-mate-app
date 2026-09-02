@@ -35,6 +35,8 @@ export type SourcingApiResponse =
       chosen: Listing
       alternatives: Listing[]
     }
+  /** Candidate listings presented for the user to pick from (nothing logged). */
+  | { kind: 'options'; text: string; options: Listing[] }
   | { kind: 'no_match'; text: string }
   | { kind: 'error'; text: string; code?: string }
 
@@ -104,6 +106,26 @@ export function validateAlternatives(raw: unknown): Listing[] {
   for (const entry of raw) {
     const v = validateListing(entry)
     if (v) out.push(v)
+    if (out.length >= 3) break
+  }
+  return out
+}
+
+/**
+ * Presented options (not logged). Same real-URL / real-price checks as a
+ * listing, capped at 3 (Section 20 volume cap), deduped by URL. These prices
+ * are candidates the user is choosing from — the page-verified price rail
+ * still runs when one is actually submitted.
+ */
+export function validateOptions(raw: unknown): Listing[] {
+  if (!Array.isArray(raw)) return []
+  const seen = new Set<string>()
+  const out: Listing[] = []
+  for (const entry of raw) {
+    const v = validateListing(entry)
+    if (!v || seen.has(v.url)) continue
+    seen.add(v.url)
+    out.push(v)
     if (out.length >= 3) break
   }
   return out

@@ -126,6 +126,8 @@ export type SubmittedResult = {
 export type TurnOutcome =
   | { kind: 'message'; text: string }
   | { kind: 'submit'; submitted: SubmittedResult }
+  /** Candidate options presented for the user to choose from (not logged). */
+  | { kind: 'options'; text: string; options: unknown }
   | { kind: 'timeout' }
   /** Ran out of searches this pass without landing anything solid. */
   | { kind: 'exhausted' }
@@ -206,6 +208,38 @@ export const SUBMIT_TOOL = {
   },
 }
 
+export const PRESENT_TOOL = {
+  name: 'present_sourcing_options',
+  description:
+    'Show the user the candidate listings you found so they can pick one to log. Call this instead of writing the options into your text reply — your text should stay to one or two sentences. At most 3 options (a volume cap; do not exceed it). Each must be a real single-product page.',
+  strict: true,
+  input_schema: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['options'],
+    properties: {
+      options: {
+        type: 'array',
+        description: '1 to 3 candidate listings, strongest first.',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['title', 'retailer', 'price_usd', 'url', 'width_in', 'depth_in', 'height_in'],
+          properties: {
+            title: { type: 'string' },
+            retailer: { type: 'string', description: 'e.g. "Wayfair", "Article".' },
+            price_usd: { type: 'number', description: 'Best price you have. 0 if genuinely none.' },
+            url: { type: 'string', description: 'Direct single-product page URL.' },
+            width_in: { type: 'number', description: 'Inches from the page. 0 if not stated.' },
+            depth_in: { type: 'number', description: 'Inches from the page. 0 if not stated.' },
+            height_in: { type: 'number', description: 'Inches from the page. 0 if not stated.' },
+          },
+        },
+      },
+    },
+  },
+}
+
 export const WEB_SEARCH_TOOL = { type: 'web_search_20260209', name: 'web_search', max_uses: 4 }
 export const WEB_FETCH_TOOL = { type: 'web_fetch_20260209', name: 'web_fetch', max_uses: 4 }
 
@@ -279,23 +313,24 @@ export function buildSystemPrompt(
     '- Do not judge the user\'s taste. Suggesting directions is fine; editorializing is not.',
     '',
     'When you do search:',
-    '- Make the first query specific: product type + key attribute (wood, material, finish) + size + any price ceiling, e.g. "walnut king bed frame under $1000" — not "walnut bed". A precise query returns product pages directly; a vague one returns category pages you then have to drill into, which burns your search budget.',
-    '- Lead with retailers whose SEARCH RESULTS carry the price and whose product pages load without JavaScript: Amazon, Etsy, IKEA, Target, Walmart, Wayfair. Article, West Elm, CB2, Crate & Barrel, Pottery Barn, Home Depot, and Lowe\'s render prices client-side — web_fetch on those often comes back empty, so only use one if the price is clearly shown in the search result itself.',
+    '- Compose the query yourself from the WHOLE conversation. Never pass the user\'s words verbatim into web_search — chatty or fragmentary phrasing ("check Wayfair, can be any real wood, just stained walnut colour") makes a bad query. Rewrite it as: [retailer, if named] [material/finish] [product type] [size] [price ceiling]. That example becomes: "wayfair walnut stained wood king bed frame".',
+    '- Make the query specific: product type + key attribute (wood, material, finish) + size + any price ceiling, e.g. "walnut king bed frame under $1000" — not "walnut bed". A precise query returns product pages directly; a vague one returns category pages.',
+    '- Most large retailers (IKEA, Article, Wayfair, West Elm, Home Depot, Target) render prices client-side, so web_fetch on their product pages usually returns nothing. Do not count on the fetch. Get the price from the search result, and if the fetch of that page comes back empty, say the price is unconfirmed — do not write "confirmed" or "verified".',
     '- Never issue the same query twice. If a search did not get you closer, change it — a different retailer, different wording, a loosened constraint — or stop searching and use what you have. Repeating a query wastes the whole budget.',
     '- The moment a search surfaces even one direct product-page URL, web_fetch THAT page to confirm price and stock. Do not keep searching when you already have a page worth opening. Product-page URLs contain /product/, /products/, /dp/, /listing/, /p/, or /pdp/ and usually end in an id. A /b/, /c/, /shop/, /browse/, /category/, or /market/ path is a listing page — never web_fetch one of those, and never web_fetch a search URL (?k= / ?q= / /s? / /sch/); neither resolves to a single product.',
     '- If web_fetch returns little or no page text (a blocked or client-rendered page — common on Article, Wayfair, Home Depot), you have NOT read that page. Do not state a price, stock status, or dimensions from it. Either fall back to a listing whose price is stated in the search result, or treat it as not verifiable and move on.',
     '- Every URL you log MUST be a direct, single-product page. A search-results page, a category / "shop by" / "browse" / "shop all" page, or a page listing many products is NOT a listing.',
     '- Read each candidate product page. If it shows discontinued, no longer available, out of stock, sold out, or currently unavailable, do not log it — find another.',
-    '- A few strong options, not an exhaustive list: one primary plus at most 3 alternatives.',
-    '- You have a small, fixed number of searches per reply. If you use them up before finding solid options, stop and present the best 1 or 2 you have. If nothing is usable, say so plainly and ask one focused question to narrow it — a material, a size range, or a store. Never mention search limits, quotas, or "this turn", and never ask the user to tell you to keep going. Just work with what you found.',
+    '- At most 3 options, strongest first. Fewer is fine.',
+    '- You have a small, fixed number of searches per reply. If you use them up before finding solid options, present the best 1 or 2 you have. If nothing is usable, say so plainly and ask one focused question to narrow it — a material, a size range, or a store. Never mention search limits, quotas, or "this turn", and never ask the user to tell you to keep going. Just work with what you found.',
     '- If the exact spec has no in-stock match (e.g. solid walnut king under $1000 is genuinely scarce), present the closest real listings instead of nothing — a veneer or wood-finish version, or one a little over budget — and say plainly how each differs from the ask. A real near-match beats an empty result.',
-    '- Give width, depth, height in inches for the primary ONLY if the page states them. Use 0 otherwise. Never estimate dimensions. Never invent a price or a link.',
+    '- Give width, depth, height in inches for a listing ONLY if the page states them. Use 0 otherwise. Never estimate dimensions. Never invent a price or a link.',
     '',
     'Presenting and logging:',
-    '- After you search, reply with 2 to 4 options — name, retailer, price, and link for each — and ask which one to log. Do NOT log anything yet.',
-    '- Call submit_sourcing only after the user picks an option, OR when the user explicitly asked you to just find and log the best match without reviewing. Never log an item the user has not chosen.',
-    '- When you do call submit_sourcing: it must be a verified listing (real price, real single-product URL, in stock). Set match.kind = "existing" + match.item_id if it clearly matches an item on the room list above; otherwise match.kind = "new" with a short match.item_name.',
-    '- If the room already has an item matching what the user picked, use match.kind = "existing" so it updates that item instead of adding a duplicate.',
+    '- After a search, call present_sourcing_options with your 1-3 candidates. Put the retailer, price, dimensions, and URL in the tool call — NOT in your text. Keep your text to one or two short sentences: name your top pick and its price, and ask whether to log it or see the alternatives.',
+    '- Call submit_sourcing only after the user picks an option, OR when they explicitly asked you to just find and log the best match without reviewing. Never log an item the user has not chosen.',
+    '- submit_sourcing must be a verified listing: a real single-product URL you web_fetch\'d this turn, with its price visible in that page\'s text. If you could not open the page (blocked / client-rendered), do not submit it — say you couldn\'t confirm the price and suggest a store whose prices show in search.',
+    '- Set match.kind = "existing" + match.item_id if the pick clearly matches an item on the room list above; otherwise match.kind = "new" with a short match.item_name.',
     '- If you searched and found nothing solid, say so and ask how to adjust. Do not log an unverified listing.',
   ].join('\n')
 }
@@ -351,6 +386,7 @@ export async function runSourcingTurn(opts: {
   const tools = [
     WEB_SEARCH_TOOL,
     WEB_FETCH_TOOL,
+    PRESENT_TOOL,
     SUBMIT_TOOL,
   ] as unknown as Anthropic.Messages.ToolUnion[]
   const debug = Boolean(process.env.SOURCING_DEBUG)
@@ -426,20 +462,22 @@ export async function runSourcingTurn(opts: {
       }
     }
   }
-  const findSubmit = (content: Anthropic.ContentBlock[]) =>
+  const findTool = (content: Anthropic.ContentBlock[], name: string) =>
     content.find(
-      (b): b is Anthropic.ToolUseBlock => b.type === 'tool_use' && b.name === 'submit_sourcing'
+      (b): b is Anthropic.ToolUseBlock => b.type === 'tool_use' && b.name === name
     )
 
-  // Only the prose AFTER the last tool interaction is the reply; anything before
-  // it ("Let me open that to check the price…") is mid-turn intent narration.
+  // The reply is the prose after the last SEARCH/FETCH step; text before that
+  // ("Let me open that to check the price…") is mid-turn narration. A final
+  // present_sourcing_options / submit_sourcing call (type "tool_use") is the
+  // conclusion, not a boundary — the model's summary sits right beside it.
   const trailingText = (content: Anthropic.ContentBlock[]): string => {
-    let lastTool = -1
+    let lastStep = -1
     content.forEach((b, idx) => {
       const t = (b as { type?: string }).type ?? ''
-      if (t === 'tool_use' || t === 'server_tool_use' || t.endsWith('_tool_result')) lastTool = idx
+      if (t === 'server_tool_use' || t.endsWith('_tool_result')) lastStep = idx
     })
-    const tail = lastTool >= 0 ? content.slice(lastTool + 1) : content
+    const tail = lastStep >= 0 ? content.slice(lastStep + 1) : content
     const blocks = tail.filter((b): b is Anthropic.TextBlock => b.type === 'text')
     const src = blocks.length
       ? blocks
@@ -479,7 +517,17 @@ export async function runSourcingTurn(opts: {
         continue
       }
 
-      const toolUse = findSubmit(response.content)
+      const present = findTool(response.content, 'present_sourcing_options')
+      if (present) {
+        const raw = stripLimitNarration(trailingText(response.content))
+        return {
+          kind: 'options',
+          text: raw || 'Here are the options I found.',
+          options: (present.input as { options?: unknown }).options,
+        }
+      }
+
+      const toolUse = findTool(response.content, 'submit_sourcing')
       if (toolUse) {
         const submitted = toolUse.input as SubmittedResult
         if (submitted.outcome === 'sourced') {
