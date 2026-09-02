@@ -1,5 +1,22 @@
 import type Anthropic from '@anthropic-ai/sdk'
 import type { ConversationMessage } from './sourcing'
+import type { PaletteEntry } from './types'
+import type { UploadImageMime } from './style'
+
+/** Project-level style context inherited by every room chat (spec 9.2). Built
+ *  by the route from the confirmed style profile + style_references. */
+export type SourcingStyleContext = {
+  /** The composed Mood / Materials / Avoid block (projects.style_summary). */
+  summary: string | null
+  palette: PaletteEntry[]
+  prefersUnique: boolean | null
+  dealSensitive: boolean | null
+  webRefs: { url: string; caption: string | null }[]
+  /** How many uploaded reference photos are attached to the first user turn. */
+  imageCount: number
+}
+
+export type SourcingImage = { media_type: UploadImageMime; data: string }
 
 // The AI orchestration for the sourcing feature: the system prompt, the tool
 // set, and the loop that turns a conversation into one assistant turn — which
@@ -103,11 +120,45 @@ export const SUBMIT_TOOL = {
 export const WEB_SEARCH_TOOL = { type: 'web_search_20260209', name: 'web_search', max_uses: 4 }
 export const WEB_FETCH_TOOL = { type: 'web_fetch_20260209', name: 'web_fetch', max_uses: 3 }
 
+function styleLines(style: SourcingStyleContext): string[] {
+  const out: string[] = ['', 'Project style profile (the shared direction for the whole project — spec 9.2):']
+  if (style.summary) {
+    for (const line of style.summary.split('\n')) if (line.trim()) out.push(`- ${line.trim()}`)
+  }
+  if (style.palette.length > 0) {
+    out.push(`- Palette: ${style.palette.map((p) => `${p.label} ${p.hex}`).join(', ')}`)
+  }
+  if (style.webRefs.length > 0) {
+    out.push('- Reference links on file:')
+    for (const r of style.webRefs) out.push(`  · ${r.caption ? `${r.caption} — ` : ''}${r.url}`)
+  }
+  if (style.imageCount > 0) {
+    out.push(
+      `- ${style.imageCount} reference photo${style.imageCount === 1 ? '' : 's'} for the project vibe ${style.imageCount === 1 ? 'is' : 'are'} attached to the first message. Read ${style.imageCount === 1 ? 'it' : 'them'} for palette, materials, and mood.`
+    )
+  }
+  if (style.prefersUnique === true) {
+    out.push(
+      '- The owner leans toward handmade and one-of-a-kind pieces. Favor Etsy, independent makers, small studios, and vintage/antique sources first. Treat big-box (Wayfair, Target, IKEA) as a fallback, not the default.'
+    )
+  }
+  if (style.dealSensitive === true) {
+    out.push(
+      '- The owner is deal-sensitive. For every option you present, check for a current sale or promo code and include the sale price and the code when there is one.'
+    )
+  }
+  out.push(
+    "- This vibe is already known. Don't ask the user to re-explain it — build on it. They can still add room-specific notes on top."
+  )
+  return out
+}
+
 export function buildSystemPrompt(
   roomName: string,
   dims: string | null,
   items: { id: string; name: string; status: string }[],
-  budget?: string | null
+  budget?: string | null,
+  style?: SourcingStyleContext | null
 ): string {
   const itemLines =
     items.length > 0
@@ -128,6 +179,9 @@ export function buildSystemPrompt(
           'Keep suggestions realistic against what is left. If an option would push the project over, say so plainly rather than staying quiet.',
         ]
       : []),
+    // Project style profile (spec 9.2) — mood, palette, preferences inherited
+    // from the confirmed style profile so the vibe never needs re-explaining.
+    ...(style ? styleLines(style) : []),
     '',
     'Conversation:',
     '- If the request is a vibe or underspecified, do NOT search yet. Ask one focused clarifying question, or offer 2 or 3 concrete directions, and wait for a reply.',
@@ -155,6 +209,32 @@ export function buildSystemPrompt(
 const FALLBACK_MESSAGE =
   'Tell me a bit more about what you have in mind and I can look for options.'
 
+/** Map the text history into message params, prepending the project's style
+ *  reference photos to the first user turn (spec 9.2). A cache breakpoint on
+ *  that first turn keeps the images from re-encoding every turn of one
+ *  conversation. Pure — unit-tested in sourcing-check. */
+export function buildSourcingMessages(
+  messages: ConversationMessage[],
+  styleImages?: SourcingImage[]
+): Anthropic.MessageParam[] {
+  const imgs = styleImages ?? []
+  return messages.map((m, i) => {
+    if (i === 0 && m.role === 'user' && imgs.length > 0) {
+      return {
+        role: 'user',
+        content: [
+          ...imgs.map((img) => ({
+            type: 'image' as const,
+            source: { type: 'base64' as const, media_type: img.media_type, data: img.data },
+          })),
+          { type: 'text' as const, text: m.content, cache_control: { type: 'ephemeral' as const } },
+        ],
+      }
+    }
+    return { role: m.role, content: m.content }
+  })
+}
+
 /**
  * Produce the next assistant turn for a sourcing conversation. Aborts after
  * ENGINE_TIMEOUT_MS and reports 'timeout' rather than hanging.
@@ -167,9 +247,13 @@ export async function runSourcingTurn(opts: {
   items: { id: string; name: string; status: string }[]
   /** Project budget context for the system prompt (spec 9.2). */
   budget?: string | null
+  /** Project style profile inherited by this room chat (spec 9.2). */
+  style?: SourcingStyleContext | null
+  /** Uploaded style-reference photos, prepended to the first user turn. */
+  styleImages?: SourcingImage[]
   messages: ConversationMessage[]
 }): Promise<TurnOutcome> {
-  const { client, model, roomName, dims, items, budget } = opts
+  const { client, model, roomName, dims, items, budget, style, styleImages } = opts
   const tools = [
     WEB_SEARCH_TOOL,
     WEB_FETCH_TOOL,
@@ -182,14 +266,11 @@ export async function runSourcingTurn(opts: {
   const system = [
     {
       type: 'text' as const,
-      text: buildSystemPrompt(roomName, dims, items, budget),
+      text: buildSystemPrompt(roomName, dims, items, budget, style),
       cache_control: { type: 'ephemeral' as const },
     },
   ]
-  const messages: Anthropic.MessageParam[] = opts.messages.map((m) => ({
-    role: m.role,
-    content: m.content,
-  }))
+  const messages: Anthropic.MessageParam[] = buildSourcingMessages(opts.messages, styleImages)
   const common = { model, max_tokens: 8192, system, output_config: { effort: 'medium' } } as const
 
   const controller = new AbortController()

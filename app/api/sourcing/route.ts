@@ -1,8 +1,10 @@
 import { NextResponse } from 'next/server'
 import { getSupabaseServerClient } from '@/lib/supabase/server'
 import { getAnthropicClient, isAnthropicConfigured, ANTHROPIC_MODEL } from '@/lib/anthropic'
-import { runSourcingTurn } from '@/lib/sourcing-engine'
+import { runSourcingTurn, type SourcingImage, type SourcingStyleContext } from '@/lib/sourcing-engine'
 import { computeBudgetRollup, describeBudgetForPrompt, type BudgetItem } from '@/lib/budget'
+import { mediaTypeFromPath, MAX_IMAGE_B64_BYTES } from '@/lib/style'
+import type { PaletteEntry } from '@/lib/types'
 import {
   composeSourcingNote,
   validateAlternatives,
@@ -17,6 +19,10 @@ export const runtime = 'nodejs'
 // under this ceiling.
 export const maxDuration = 120
 
+const STYLE_BUCKET = 'style-references'
+// Cap on reference photos re-sent to the model each sourcing turn — bounds cost
+// while still giving the room chat the project's visual vibe.
+const STYLE_REF_IMAGE_CAP = 3
 const MAX_MESSAGES = 24
 const MAX_CONTENT = 2000
 
@@ -90,18 +96,76 @@ export async function POST(req: Request): Promise<NextResponse<SourcingApiRespon
       ? `${Number(room.wall_length)}in x ${Number(room.wall_width)}in`
       : null
 
-  // Project budget context (spec 9.2): the assistant needs to know what's left
-  // to weigh whether a suggestion is affordable. Rollup spans every room.
-  const [{ data: projectRow }, { data: budgetItemRows }] = await Promise.all([
-    supabase.from('projects').select('budget_target').eq('id', room.project_id).maybeSingle(),
+  // Project budget + style context (spec 9.2): a room chat inherits both so the
+  // vibe and affordability never need re-explaining. Rollup spans every room.
+  const [{ data: projectRow }, { data: budgetItemRows }, { data: refRows }] = await Promise.all([
+    supabase
+      .from('projects')
+      .select('budget_target, style_summary, palette, prefers_unique, deal_sensitive')
+      .eq('id', room.project_id)
+      .maybeSingle(),
     supabase.from('items').select('price_estimate, status').eq('project_id', room.project_id),
+    supabase
+      .from('style_references')
+      .select('kind, url, caption, storage_path')
+      .eq('project_id', room.project_id),
   ])
+
   const budget = describeBudgetForPrompt(
     computeBudgetRollup(
       (budgetItemRows ?? []) as BudgetItem[],
       projectRow?.budget_target ?? null
     )
   )
+
+  // Split style references: web links stay text, uploaded photos become image
+  // blocks on the first user turn (capped).
+  const refs = (refRows ?? []) as {
+    kind: string
+    url: string | null
+    caption: string | null
+    storage_path: string | null
+  }[]
+  const webRefs = refs
+    .filter((r) => (r.kind === 'web_link' || r.kind === 'web_image') && r.url)
+    .map((r) => ({ url: r.url as string, caption: r.caption }))
+  const uploadedKeys = refs
+    .filter((r) => r.kind === 'uploaded_image' && r.storage_path)
+    .map((r) => r.storage_path as string)
+    .slice(0, STYLE_REF_IMAGE_CAP)
+
+  const styleImages: SourcingImage[] = []
+  for (const key of uploadedKeys) {
+    const media_type = mediaTypeFromPath(key)
+    if (!media_type) continue
+    const { data, error } = await supabase.storage.from(STYLE_BUCKET).download(key)
+    if (error || !data) {
+      console.error('[sourcing] style image download failed', key, error?.message)
+      continue
+    }
+    const b64 = Buffer.from(await data.arrayBuffer()).toString('base64')
+    if (b64.length > MAX_IMAGE_B64_BYTES) continue
+    styleImages.push({ media_type, data: b64 })
+  }
+
+  const palette = (projectRow?.palette ?? []) as PaletteEntry[]
+  const hasStyle =
+    Boolean(projectRow?.style_summary) ||
+    palette.length > 0 ||
+    projectRow?.prefers_unique != null ||
+    projectRow?.deal_sensitive != null ||
+    webRefs.length > 0 ||
+    styleImages.length > 0
+  const style: SourcingStyleContext | null = hasStyle
+    ? {
+        summary: projectRow?.style_summary ?? null,
+        palette,
+        prefersUnique: projectRow?.prefers_unique ?? null,
+        dealSensitive: projectRow?.deal_sensitive ?? null,
+        webRefs,
+        imageCount: styleImages.length,
+      }
+    : null
 
   let turn
   try {
@@ -112,6 +176,8 @@ export async function POST(req: Request): Promise<NextResponse<SourcingApiRespon
       dims,
       items,
       budget,
+      style,
+      styleImages,
       messages,
     })
   } catch (err) {

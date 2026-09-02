@@ -8,7 +8,11 @@ import {
   validateListing,
 } from '../lib/sourcing.ts'
 import { computeBudgetRollup, describeBudgetForPrompt } from '../lib/budget.ts'
-import { buildSystemPrompt } from '../lib/sourcing-engine.ts'
+import {
+  buildSourcingMessages,
+  buildSystemPrompt,
+  type SourcingStyleContext,
+} from '../lib/sourcing-engine.ts'
 
 let pass = 0
 let fail = 0
@@ -162,6 +166,58 @@ check('system prompt: includes the Project budget line when budget given', promp
 check('system prompt: tells the model to flag going over', /push the project over/i.test(promptWith))
 const promptWithout = buildSystemPrompt('Living room', '168in x 144in', [], null)
 check('system prompt: omits the budget section entirely when null', !promptWithout.includes('Project budget'))
+
+// --- Phase 6d: style profile inherited into the room chat (spec 9.2) ---------
+
+const style: SourcingStyleContext = {
+  summary: 'Mood: warm, coastal, calm.\nMaterials & textures: white oak, linen, aged brass.\nAvoid: chrome, glossy black.',
+  palette: [
+    { hex: '#E8C9A0', label: 'Warm sand' },
+    { hex: '#5C8A82', label: 'Dusty teal' },
+  ],
+  prefersUnique: true,
+  dealSensitive: true,
+  webRefs: [{ url: 'https://example.com/lookbook', caption: 'coastal calm' }],
+  imageCount: 2,
+}
+const sp = buildSystemPrompt('Living room', '168in x 144in', [], desc, style)
+check('style: prompt has a Project style profile section', sp.includes('Project style profile'))
+check('style: carries the mood/materials/avoid text', sp.includes('Mood: warm, coastal, calm.') && sp.includes('Avoid: chrome, glossy black.'))
+check('style: lists the palette with hexes', sp.includes('Warm sand #E8C9A0') && sp.includes('Dusty teal #5C8A82'))
+check('style: lists web reference links', sp.includes('coastal calm — https://example.com/lookbook'))
+check('style: notes attached reference photos', /2 reference photos for the project vibe are attached to the first message/i.test(sp))
+check('style: prefers_unique -> favor makers, big-box as fallback', /Favor Etsy, independent makers[\s\S]*fallback, not the default/i.test(sp))
+check('style: deal_sensitive -> check for a current sale or promo code', /check for a current sale or promo code/i.test(sp))
+check('style: tells the model not to re-ask the vibe', /Don't ask the user to re-explain it/i.test(sp))
+
+const spNoPrefs = buildSystemPrompt('Living room', null, [], null, {
+  summary: 'Mood: minimal.',
+  palette: [],
+  prefersUnique: false,
+  dealSensitive: false,
+  webRefs: [],
+  imageCount: 0,
+})
+check('style: prefers_unique false -> no "Favor Etsy" line', !/Favor Etsy/i.test(spNoPrefs))
+check('style: deal_sensitive false -> no sale-check line', !/check for a current sale/i.test(spNoPrefs))
+check('style: no photos -> no "attached to the first message" note', !/attached to the first message/i.test(spNoPrefs))
+check('style: omitted entirely when no style arg', !buildSystemPrompt('Living room', null, [], null).includes('Project style profile'))
+
+// buildSourcingMessages — style photos ride the first user turn
+const mapped = buildSourcingMessages(
+  [
+    { role: 'user', content: 'something for the reading corner' },
+    { role: 'assistant', content: 'what kind of chair?' },
+    { role: 'user', content: 'an accent chair' },
+  ],
+  [{ media_type: 'image/jpeg', data: 'QUJD' }]
+)
+const first = mapped[0].content as { type: string; source?: { type: string; media_type: string }; text?: string; cache_control?: unknown }[]
+check('messages: first user turn becomes a content array', Array.isArray(mapped[0].content))
+check('messages: image block first, base64 jpeg', first[0].type === 'image' && first[0].source?.type === 'base64' && first[0].source?.media_type === 'image/jpeg')
+check('messages: text block after image, with a cache breakpoint', first[1].type === 'text' && first[1].text === 'something for the reading corner' && !!first[1].cache_control)
+check('messages: assistant + later user turns stay plain strings', mapped[1].content === 'what kind of chair?' && mapped[2].content === 'an accent chair')
+check('messages: no images -> all plain strings', buildSourcingMessages([{ role: 'user', content: 'hi' }]).every((m) => typeof m.content === 'string'))
 
 console.log(`\n${fail === 0 ? 'SOURCING + PROMPT CHECK PASSED' : 'SOURCING + PROMPT CHECK FAILED'} (${pass} passed, ${fail} failed)`)
 process.exit(fail === 0 ? 0 : 1)
