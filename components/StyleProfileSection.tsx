@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { Button, Card } from '@intelligent-mate/ui'
 import { EmptyState } from './EmptyState'
 import { StyleChatPanel } from './StyleChatPanel'
+import { StyleReferenceGallery } from './StyleReferenceGallery'
 import type { Project, StyleReference } from '@/lib/types'
 
 // Phase 6 (spec 9.1) — the project dashboard entry point for the style
@@ -25,7 +26,6 @@ export function StyleProfileSection({
   const summaryLines = project.style_summary
     ? project.style_summary.split('\n').filter(Boolean)
     : []
-  const webRefs = references.filter((r) => r.url)
 
   const toggleLabel = open
     ? 'Hide conversation'
@@ -56,22 +56,11 @@ export function StyleProfileSection({
               Updated {new Date(project.style_confirmed_at).toLocaleDateString()}
             </p>
           )}
-          {webRefs.length > 0 && (
-            <ul className="mm-style__refs">
-              {webRefs.map((ref) => (
-                <li key={ref.id}>
-                  <a
-                    className="mm-inlinelink"
-                    href={ref.url as string}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    {ref.caption || ref.url} ↗
-                  </a>
-                </li>
-              ))}
-            </ul>
-          )}
+          <StyleReferenceGallery references={references} canEdit={canEdit} onChanged={onChanged} />
+        </Card>
+      ) : references.length > 0 ? (
+        <Card padding="lg">
+          <StyleReferenceGallery references={references} canEdit={canEdit} onChanged={onChanged} />
         </Card>
       ) : (
         !open && (
@@ -92,11 +81,7 @@ export function StyleProfileSection({
       )}
 
       {open && canEdit && (
-        <StyleChatPanel
-          projectId={project.id}
-          hasProfile={hasProfile}
-          onConfirmed={onChanged}
-        />
+        <StyleChatPanel projectId={project.id} hasProfile={hasProfile} onChanged={onChanged} />
       )}
     </div>
   )

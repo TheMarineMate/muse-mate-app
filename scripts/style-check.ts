@@ -6,12 +6,15 @@ import {
   composeStyleSummary,
   coerceBool,
   describeConfirmation,
+  isValidStoragePath,
+  mediaTypeFromPath,
   sanitizeList,
+  storageKeyForUpload,
   validatePalette,
   validateStyleReferences,
   MAX_REFERENCES,
 } from '../lib/style.ts'
-import { buildStyleSystemPrompt, CONFIRM_TOOL } from '../lib/style-engine.ts'
+import { buildStyleSystemPrompt, buildTurnMessages, CONFIRM_TOOL } from '../lib/style-engine.ts'
 
 let pass = 0
 let fail = 0
@@ -126,6 +129,44 @@ check('system prompt: does not withhold the save or ask another question first',
 check('system prompt: still bars an unprompted self-initiated save', /do not call the tool on your own read of the room when the user has not asked to save/i.test(prompt))
 check('confirm tool: description recognizes a direct save instruction', /direct instruction to save or confirm/i.test(JSON.stringify(CONFIRM_TOOL)))
 check('confirm tool: description allows a partial profile', /still partial \(empty arrays are fine/i.test(JSON.stringify(CONFIRM_TOOL)))
+
+// --- Phase 6c: image attachment helpers --------------------------------
+const PID = '11111111-1111-1111-1111-111111111111'
+
+check('mediaTypeFromPath: jpg', mediaTypeFromPath(`${PID}/a.jpg`) === 'image/jpeg')
+check('mediaTypeFromPath: JPEG upper-case', mediaTypeFromPath(`${PID}/a.JPEG`) === 'image/jpeg')
+check('mediaTypeFromPath: png/webp/gif', mediaTypeFromPath('x/a.png') === 'image/png' && mediaTypeFromPath('x/a.webp') === 'image/webp' && mediaTypeFromPath('x/a.gif') === 'image/gif')
+check('mediaTypeFromPath: unknown ext -> null', mediaTypeFromPath('x/a.tiff') === null && mediaTypeFromPath('x/a') === null)
+
+check('isValidStoragePath: accepts <projectId>/<uuid>.jpg', isValidStoragePath(`${PID}/2b2c.jpg`, PID))
+check('isValidStoragePath: rejects wrong project folder', !isValidStoragePath(`22222222-2222-2222-2222-222222222222/a.jpg`, PID))
+check('isValidStoragePath: rejects path traversal', !isValidStoragePath(`${PID}/../secrets.jpg`, PID))
+check('isValidStoragePath: rejects nested dirs', !isValidStoragePath(`${PID}/sub/a.jpg`, PID))
+check('isValidStoragePath: rejects backslash', !isValidStoragePath(`${PID}\\a.jpg`, PID))
+check('isValidStoragePath: rejects non-image ext', !isValidStoragePath(`${PID}/a.pdf`, PID))
+check('isValidStoragePath: rejects non-string', !isValidStoragePath(42 as unknown, PID) && !isValidStoragePath(null, PID))
+
+const key = storageKeyForUpload(PID, 'image/jpeg')
+check('storageKeyForUpload: under the project folder, .jpg', key.startsWith(`${PID}/`) && key.endsWith('.jpg'))
+check('storageKeyForUpload: output passes its own validator', isValidStoragePath(key, PID))
+check('storageKeyForUpload: png mime -> .png', storageKeyForUpload(PID, 'image/png').endsWith('.png'))
+
+// --- buildTurnMessages (multimodal mapping) --------------------------
+const mapped = buildTurnMessages([
+  { role: 'user', content: 'here is the room', images: [{ media_type: 'image/jpeg', data: 'QUJD' }] },
+  { role: 'assistant', content: 'got it' },
+  { role: 'user', content: 'and this chair' },
+])
+check('buildTurnMessages: image turn becomes a content array', Array.isArray(mapped[0].content))
+const firstContent = mapped[0].content as { type: string; source?: { type: string; media_type: string; data: string } }[]
+check('buildTurnMessages: image block first, base64 source', firstContent[0].type === 'image' && firstContent[0].source?.type === 'base64' && firstContent[0].source?.media_type === 'image/jpeg' && firstContent[0].source?.data === 'QUJD')
+check('buildTurnMessages: text block after the image', firstContent[1].type === 'text' && (firstContent[1] as unknown as { text: string }).text === 'here is the room')
+check('buildTurnMessages: assistant stays a plain string', mapped[1].content === 'got it')
+check('buildTurnMessages: user with no images stays a plain string', mapped[2].content === 'and this chair')
+check('buildTurnMessages: empty images array stays a plain string', typeof buildTurnMessages([{ role: 'user', content: 'hi', images: [] }])[0].content === 'string')
+
+// --- system prompt: photos are references, not products -------------
+check('system prompt: tells the model to read attached photos as vibe references', /user may attach photos[\s\S]*never products to price or source/i.test(prompt))
 
 console.log(`\n${fail === 0 ? 'STYLE RAIL CHECK PASSED' : 'STYLE RAIL CHECK FAILED'} (${pass} passed, ${fail} failed)`)
 process.exit(fail === 0 ? 0 : 1)

@@ -1,12 +1,16 @@
 import { NextResponse } from 'next/server'
 import { getSupabaseServerClient } from '@/lib/supabase/server'
 import { getAnthropicClient, isAnthropicConfigured, ANTHROPIC_MODEL } from '@/lib/anthropic'
-import { runStyleTurn } from '@/lib/style-engine'
+import { runStyleTurn, type StyleTurnMessage } from '@/lib/style-engine'
 import {
   buildConfirmedProfile,
   describeConfirmation,
+  isValidStoragePath,
+  mediaTypeFromPath,
+  MAX_ATTACHMENTS_PER_TURN,
+  MAX_ATTACHMENTS_TOTAL,
+  MAX_IMAGE_B64_BYTES,
   type StyleChatApiResponse,
-  type StyleChatMessage,
 } from '@/lib/style'
 import type { PaletteEntry } from '@/lib/types'
 
@@ -15,24 +19,82 @@ export const runtime = 'nodejs'
 // 90s abort keeps a turn under this ceiling. Needs a Vercel plan allowing >60s.
 export const maxDuration = 120
 
+const STORAGE_BUCKET = 'style-references'
 const MAX_MESSAGES = 30
 const MAX_CONTENT = 4000
 
 const errJson = (message: string, status: number, code?: string) =>
   NextResponse.json<StyleChatApiResponse>({ kind: 'error', text: message, ...(code ? { code } : {}) }, { status })
 
-function parseMessages(raw: unknown): StyleChatMessage[] | null {
+/** Parsed wire message — attachments are still raw Storage keys here; they're
+ *  validated and resolved to image bytes only after the role gate passes. */
+type ParsedMessage = { role: 'user' | 'assistant'; content: string; attachments: string[] }
+
+function parseMessages(raw: unknown): ParsedMessage[] | null {
   if (!Array.isArray(raw) || raw.length === 0 || raw.length > MAX_MESSAGES) return null
-  const out: StyleChatMessage[] = []
+  const out: ParsedMessage[] = []
   for (const m of raw) {
     if (!m || typeof m !== 'object') return null
-    const { role, content } = m as { role?: unknown; content?: unknown }
+    const { role, content, attachments } = m as {
+      role?: unknown
+      content?: unknown
+      attachments?: unknown
+    }
     if ((role !== 'user' && role !== 'assistant') || typeof content !== 'string') return null
     const text = content.trim().slice(0, MAX_CONTENT)
-    if (!text) return null
-    out.push({ role, content: text })
+    let keys: string[] = []
+    if (attachments !== undefined) {
+      if (!Array.isArray(attachments) || attachments.some((a) => typeof a !== 'string')) return null
+      keys = attachments as string[]
+      if (role !== 'user') return null
+      if (keys.length > MAX_ATTACHMENTS_PER_TURN) return null
+    }
+    // A turn must carry text or at least one image.
+    if (!text && keys.length === 0) return null
+    out.push({ role, content: text, attachments: keys })
   }
   if (out[0].role !== 'user') return null
+  if (out.reduce((n, m) => n + m.attachments.length, 0) > MAX_ATTACHMENTS_TOTAL) return null
+  return out
+}
+
+/**
+ * Resolve each message's Storage keys to inline base64 image data for the model
+ * (Phase 6c). Paths are validated against the project id first; the bucket RLS
+ * is the real boundary, this is belt-and-braces. A key that fails validation or
+ * download is skipped, not fatal — the conversation still runs on the text.
+ */
+async function resolveAttachments(
+  supabase: Awaited<ReturnType<typeof getSupabaseServerClient>>,
+  projectId: string,
+  parsed: ParsedMessage[]
+): Promise<StyleTurnMessage[]> {
+  const out: StyleTurnMessage[] = []
+  for (const m of parsed) {
+    if (m.role === 'assistant' || m.attachments.length === 0) {
+      out.push({ role: m.role, content: m.content })
+      continue
+    }
+    const images: NonNullable<Extract<StyleTurnMessage, { role: 'user' }>['images']> = []
+    for (const key of m.attachments) {
+      if (!isValidStoragePath(key, projectId)) continue
+      const media_type = mediaTypeFromPath(key)
+      if (!media_type) continue
+      const { data, error } = await supabase.storage.from(STORAGE_BUCKET).download(key)
+      if (error || !data) {
+        console.error('[style-chat] attachment download failed', key, error?.message)
+        continue
+      }
+      const bytes = Buffer.from(await data.arrayBuffer())
+      const b64 = bytes.toString('base64')
+      if (b64.length > MAX_IMAGE_B64_BYTES) {
+        console.error('[style-chat] attachment too large after encode, skipping', key)
+        continue
+      }
+      images.push({ media_type, data: b64 })
+    }
+    out.push({ role: 'user', content: m.content, images })
+  }
   return out
 }
 
@@ -45,8 +107,8 @@ export async function POST(req: Request): Promise<NextResponse<StyleChatApiRespo
   }
 
   const projectId = typeof body.projectId === 'string' ? body.projectId : ''
-  const messages = parseMessages(body.messages)
-  if (!projectId || !messages) {
+  const parsed = parseMessages(body.messages)
+  if (!projectId || !parsed) {
     return errJson('Say a little about the space to get started.', 400)
   }
 
@@ -74,6 +136,8 @@ export async function POST(req: Request): Promise<NextResponse<StyleChatApiRespo
   if (!isAnthropicConfigured()) {
     return errJson("The style assistant isn't set up on this deployment yet.", 503, 'not_configured')
   }
+
+  const messages = await resolveAttachments(supabase, projectId, parsed)
 
   let turn
   try {
@@ -131,7 +195,8 @@ export async function POST(req: Request): Promise<NextResponse<StyleChatApiRespo
     return errJson('Could not save the style profile.', 500)
   }
 
-  // References are additive (spec 9.1) — insert only URLs not already on file.
+  // Web references are additive (spec 9.1) — insert only URLs not already on
+  // file. Uploaded images are persisted client-side at upload time, not here.
   if (profile.references.length > 0) {
     const { data: existingRows } = await supabase
       .from('style_references')

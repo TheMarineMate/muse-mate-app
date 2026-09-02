@@ -140,6 +140,8 @@ export async function setProjectPalette(
 
 // --- style references (Phase 6) --------------------------------------------
 
+export const STYLE_BUCKET = 'style-references'
+
 export async function listStyleReferences(
   supabase: SupabaseClient,
   projectId: string
@@ -153,12 +155,62 @@ export async function listStyleReferences(
   return (data ?? []) as StyleReference[]
 }
 
+/** Upload a prepared image blob (Phase 6c). RLS on storage.objects enforces
+ *  editor+; the key must be `<projectId>/<name>` so the policy resolves. */
+export async function uploadStyleImage(
+  supabase: SupabaseClient,
+  storagePath: string,
+  blob: Blob
+): Promise<void> {
+  const { error } = await supabase.storage
+    .from(STYLE_BUCKET)
+    .upload(storagePath, blob, { contentType: blob.type || 'image/jpeg', upsert: false })
+  if (error) throw error
+}
+
+/** Persist the uploaded image as a lasting reference row (spec 9.4). */
+export async function createUploadedStyleReference(
+  supabase: SupabaseClient,
+  input: { projectId: string; storagePath: string; caption?: string | null }
+): Promise<StyleReference> {
+  const { data, error } = await supabase
+    .from('style_references')
+    .insert({
+      project_id: input.projectId,
+      kind: 'uploaded_image',
+      storage_path: input.storagePath,
+      caption: input.caption ?? null,
+    })
+    .select()
+    .single()
+  if (error) throw error
+  return data as StyleReference
+}
+
+/** Short-lived signed URL for displaying a private uploaded image. */
+export async function signedStyleImageUrl(
+  supabase: SupabaseClient,
+  storagePath: string,
+  expiresIn = 600
+): Promise<string | null> {
+  const { data, error } = await supabase.storage
+    .from(STYLE_BUCKET)
+    .createSignedUrl(storagePath, expiresIn)
+  if (error) return null
+  return data?.signedUrl ?? null
+}
+
+/** Remove the row and, for an uploaded image, its Storage object too. */
 export async function deleteStyleReference(
   supabase: SupabaseClient,
-  referenceId: string
+  reference: Pick<StyleReference, 'id' | 'kind' | 'storage_path'>
 ): Promise<void> {
-  const { error } = await supabase.from('style_references').delete().eq('id', referenceId)
+  const { error } = await supabase.from('style_references').delete().eq('id', reference.id)
   if (error) throw error
+  if (reference.kind === 'uploaded_image' && reference.storage_path) {
+    // Best effort — the row is already gone; a stray object is harmless.
+    await supabase.storage.from(STYLE_BUCKET).remove([reference.storage_path])
+  }
 }
 
 // --- rooms -------------------------------------------------------------------

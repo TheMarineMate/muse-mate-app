@@ -10,11 +10,69 @@
 
 import type { PaletteEntry } from './types'
 
-export type StyleChatMessage = { role: 'user' | 'assistant'; content: string }
+/** `attachments` are Storage keys under the 'style-references' bucket, only
+ *  meaningful on a user turn — the images that turn attached (Phase 6c). */
+export type StyleChatMessage = {
+  role: 'user' | 'assistant'
+  content: string
+  attachments?: string[]
+}
 
 export type StyleChatRequestBody = {
   projectId: string
   messages: StyleChatMessage[]
+}
+
+// --- Uploaded image constraints (Phase 6c) --------------------------------
+
+export const UPLOAD_IMAGE_MIME = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'] as const
+export type UploadImageMime = (typeof UPLOAD_IMAGE_MIME)[number]
+
+/** Pre-downscale file-picker ceiling (the client re-encodes to a small JPEG). */
+export const MAX_UPLOAD_BYTES = 6 * 1024 * 1024
+/** Anthropic's per-image base64 ceiling. */
+export const MAX_IMAGE_B64_BYTES = 5 * 1024 * 1024
+export const MAX_ATTACHMENTS_PER_TURN = 4
+/** Across the whole re-sent history, not per turn. */
+export const MAX_ATTACHMENTS_TOTAL = 8
+
+const EXT_TO_MIME: Record<string, UploadImageMime> = {
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  png: 'image/png',
+  webp: 'image/webp',
+  gif: 'image/gif',
+}
+
+export function mediaTypeFromPath(path: string): UploadImageMime | null {
+  const m = /\.([a-z0-9]+)$/i.exec(path.trim())
+  return m ? (EXT_TO_MIME[m[1].toLowerCase()] ?? null) : null
+}
+
+/**
+ * A Storage key must sit directly under the project's own folder —
+ * "<projectId>/<file>.<ext>" — with a known image extension, no nesting, no
+ * traversal. The bucket RLS already blocks cross-project access; this is the
+ * belt-and-braces check before the route ever touches Storage.
+ */
+export function isValidStoragePath(path: unknown, projectId: string): path is string {
+  if (typeof path !== 'string') return false
+  const p = path.trim()
+  if (!p || p.includes('..') || p.includes('\\')) return false
+  const parts = p.split('/')
+  if (parts.length !== 2 || parts[0] !== projectId) return false
+  if (!/^[A-Za-z0-9._-]{1,128}$/.test(parts[1])) return false
+  return mediaTypeFromPath(p) !== null
+}
+
+/** New object key for an upload. The client always re-encodes to JPEG, so the
+ *  extension follows the final blob's mime, not the original filename. */
+export function storageKeyForUpload(projectId: string, mime: UploadImageMime): string {
+  const ext =
+    (Object.keys(EXT_TO_MIME) as (keyof typeof EXT_TO_MIME)[]).find(
+      (k) => EXT_TO_MIME[k] === mime && k !== 'jpeg'
+    ) ?? 'jpg'
+  return `${projectId}/${crypto.randomUUID()}.${ext}`
 }
 
 /** A web reference the model proposes (uploads are Phase 6c, not here). */

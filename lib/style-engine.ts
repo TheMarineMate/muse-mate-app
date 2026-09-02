@@ -1,6 +1,13 @@
 import type Anthropic from '@anthropic-ai/sdk'
 import type { PaletteEntry } from './types'
-import type { StyleChatMessage } from './style'
+import type { UploadImageMime } from './style'
+
+/** One conversation turn as the engine consumes it: the route has already
+ *  resolved any Storage attachments to inline base64 image data (Phase 6c). */
+export type StyleTurnImage = { media_type: UploadImageMime; data: string }
+export type StyleTurnMessage =
+  | { role: 'assistant'; content: string }
+  | { role: 'user'; content: string; images?: StyleTurnImage[] }
 
 // AI orchestration for the project style-intake conversation (spec Section 9.1):
 // the system prompt, the tool set, and the loop that turns a conversation into
@@ -123,6 +130,7 @@ export function buildStyleSystemPrompt(ctx: StyleContext): string {
     '- Ask about mood and function first. One or two focused questions per turn, not a questionnaire dump.',
     '- Capture shopping preferences as they come up, the same as aesthetic ones: whether they lean toward one-of-a-kind / handmade / specialty pieces over big-box, and how deal-sensitive they are (always hunt for a current sale vs. fit matters more than price). These are standing preferences for the whole project.',
     '- When it would genuinely help, use web_search (and web_fetch to open a page) to pull real visual references — actual images or articles that exist. Never describe or link a reference you did not retrieve. A category page, a lookbook, or a blog post is fine here; it just has to be real.',
+    '- The user may attach photos. Look at them as visual references for the vibe — the space as it is now, a piece they love, a mood shot. Read them for mood, palette, materials, light. They are never products to price or source.',
     '- Keep replies conversational and short. No em dashes, no rule-of-three lists, no "I would be happy to", no restating what they just said back to them.',
     '- Stay on the vibe. Do not price-shop specific products, do not claim to add anything to a room list or a budget, do not comment on their taste unprompted. Finding a specific product to buy is the room conversation\'s job, not this one.',
     '',
@@ -140,6 +148,27 @@ export function buildStyleSystemPrompt(ctx: StyleContext): string {
 
 const FALLBACK_MESSAGE = "Tell me about the space — what should it feel like to walk into?"
 
+/** Map the conversation into Anthropic message params. A user turn carrying
+ *  images becomes a multi-block content array (images first, then the text);
+ *  everything else stays a plain string. Pure — unit-tested in style-check. */
+export function buildTurnMessages(messages: StyleTurnMessage[]): Anthropic.MessageParam[] {
+  return messages.map((m) => {
+    if (m.role === 'user' && m.images && m.images.length > 0) {
+      return {
+        role: 'user',
+        content: [
+          ...m.images.map((img) => ({
+            type: 'image' as const,
+            source: { type: 'base64' as const, media_type: img.media_type, data: img.data },
+          })),
+          { type: 'text' as const, text: m.content },
+        ],
+      }
+    }
+    return { role: m.role, content: m.content }
+  })
+}
+
 /**
  * Produce the next assistant turn for a style-intake conversation. Aborts after
  * ENGINE_TIMEOUT_MS and reports 'timeout' rather than hanging.
@@ -148,7 +177,7 @@ export async function runStyleTurn(opts: {
   client: Anthropic
   model: string
   ctx: StyleContext
-  messages: StyleChatMessage[]
+  messages: StyleTurnMessage[]
 }): Promise<StyleTurnOutcome> {
   const { client, model, ctx } = opts
   const tools = [
@@ -165,10 +194,7 @@ export async function runStyleTurn(opts: {
       cache_control: { type: 'ephemeral' as const },
     },
   ]
-  const messages: Anthropic.MessageParam[] = opts.messages.map((m) => ({
-    role: m.role,
-    content: m.content,
-  }))
+  const messages: Anthropic.MessageParam[] = buildTurnMessages(opts.messages)
   const common = { model, max_tokens: 8192, system, output_config: { effort: 'medium' } } as const
 
   const controller = new AbortController()

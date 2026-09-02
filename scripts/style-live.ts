@@ -1,24 +1,43 @@
 // Live end-to-end exercise of the style-intake engine (real Anthropic + web
-// search + web fetch). Mirrors app/api/style-chat/route.ts's non-HTTP path
-// across a multi-turn conversation: each arg after <projectId> is one user
-// turn, run in sequence. Pass "new" as the projectId to spin up a throwaway
-// Riverhouse project first (and print its id).
+// search + web fetch + multimodal image input). Mirrors
+// app/api/style-chat/route.ts's non-HTTP path across a multi-turn conversation:
+// each arg after <projectId> is one user turn, run in sequence. Pass "new" as
+// the projectId to spin up a throwaway Riverhouse project first.
 //
-//   npm run style:live -- new "opener" "reply" "yes, save it"
-//   npm run style:live -- <projectId> "let's add more texture"
+// Attach a local image to the FIRST user turn with --image <path> (repeatable):
+//   npm run style:live -- new --image ./ref.jpg "what does this room read like to you?" "save it"
 //
 // Requires ANTHROPIC_API_KEY + Supabase vars in .env.local. Spends real money.
 
+import { readFile } from 'node:fs/promises'
 import Anthropic from '@anthropic-ai/sdk'
 import { createClient } from '@supabase/supabase-js'
-import { runStyleTurn } from '../lib/style-engine.ts'
-import { buildConfirmedProfile, describeConfirmation, type StyleChatMessage } from '../lib/style.ts'
+import { runStyleTurn, type StyleTurnImage, type StyleTurnMessage } from '../lib/style-engine.ts'
+import {
+  buildConfirmedProfile,
+  describeConfirmation,
+  mediaTypeFromPath,
+  storageKeyForUpload,
+} from '../lib/style.ts'
 import type { PaletteEntry } from '../lib/types.ts'
 
-const arg = process.argv[2]
-const turns = process.argv.slice(3)
+const BUCKET = 'style-references'
+
+const rawArgs = process.argv.slice(2)
+const imagePaths: string[] = []
+const positional: string[] = []
+for (let i = 0; i < rawArgs.length; i++) {
+  if (rawArgs[i] === '--image') {
+    const p = rawArgs[++i]
+    if (p) imagePaths.push(p)
+  } else {
+    positional.push(rawArgs[i])
+  }
+}
+const arg = positional[0]
+const turns = positional.slice(1)
 if (!arg || turns.length === 0) {
-  console.error('usage: npm run style:live -- <projectId|new> "<turn1>" ["<turn2>" ...]')
+  console.error('usage: npm run style:live -- <projectId|new> [--image <path>] "<turn1>" ["<turn2>" ...]')
   process.exit(1)
 }
 
@@ -45,13 +64,65 @@ if (arg === 'new') {
   console.log(`created throwaway project ${projectId}\n`)
 }
 
+// Upload any --image files to Storage + persist the uploaded_image rows, then
+// attach their keys to the first user turn.
+const firstTurnAttachments: string[] = []
+for (const path of imagePaths) {
+  const mime = mediaTypeFromPath(path)
+  if (!mime) {
+    console.error(`skipping ${path}: not a supported image extension`)
+    continue
+  }
+  const bytes = await readFile(path)
+  const key = storageKeyForUpload(projectId, mime)
+  const { error: upErr } = await supabase.storage
+    .from(BUCKET)
+    .upload(key, bytes, { contentType: mime, upsert: false })
+  if (upErr) throw upErr
+  const { error: rowErr } = await supabase
+    .from('style_references')
+    .insert({ project_id: projectId, kind: 'uploaded_image', storage_path: key })
+  if (rowErr) throw rowErr
+  firstTurnAttachments.push(key)
+  console.log(`uploaded ${path} -> ${key}`)
+}
+
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
 const model = process.env.ANTHROPIC_MODEL || 'claude-sonnet-5'
-const history: StyleChatMessage[] = []
 
-for (const userTurn of turns) {
-  history.push({ role: 'user', content: userTurn })
-  console.log(`\n>>> user: ${userTurn}`)
+type WireMsg = { role: 'user' | 'assistant'; content: string; attachments?: string[] }
+const history: WireMsg[] = []
+
+/** Same resolution the route does: Storage key -> inline base64 image. */
+async function resolve(msgs: WireMsg[]): Promise<StyleTurnMessage[]> {
+  const out: StyleTurnMessage[] = []
+  for (const m of msgs) {
+    if (m.role === 'assistant' || !m.attachments?.length) {
+      out.push({ role: m.role, content: m.content })
+      continue
+    }
+    const images: StyleTurnImage[] = []
+    for (const key of m.attachments) {
+      const media_type = mediaTypeFromPath(key)
+      if (!media_type) continue
+      const { data, error } = await supabase.storage.from(BUCKET).download(key)
+      if (error || !data) {
+        console.error(`  download failed for ${key}: ${error?.message}`)
+        continue
+      }
+      const b64 = Buffer.from(await data.arrayBuffer()).toString('base64')
+      images.push({ media_type, data: b64 })
+    }
+    out.push({ role: 'user', content: m.content, images })
+  }
+  return out
+}
+
+for (let t = 0; t < turns.length; t++) {
+  const userTurn = turns[t]
+  const attachments = t === 0 && firstTurnAttachments.length > 0 ? firstTurnAttachments : undefined
+  history.push({ role: 'user', content: userTurn, ...(attachments ? { attachments } : {}) })
+  console.log(`\n>>> user: ${userTurn}${attachments ? `  [+${attachments.length} image]` : ''}`)
 
   const { data: project, error: projErr } = await supabase
     .from('projects')
@@ -73,7 +144,7 @@ for (const userTurn of turns) {
       prefersUnique: project.prefers_unique ?? null,
       dealSensitive: project.deal_sensitive ?? null,
     },
-    messages: history,
+    messages: await resolve(history),
   })
   const secs = Math.round((Date.now() - t0) / 1000)
 
@@ -130,7 +201,7 @@ for (const userTurn of turns) {
     .single()
   const { data: savedRefs } = await supabase
     .from('style_references')
-    .select('kind, url, caption')
+    .select('kind, url, caption, storage_path')
     .eq('project_id', projectId)
 
   console.log('    -> WROTE profile:')
