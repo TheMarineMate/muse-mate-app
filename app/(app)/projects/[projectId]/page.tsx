@@ -10,11 +10,18 @@ import { Fab } from '@/components/Fab'
 import { BudgetRollup } from '@/components/BudgetRollup'
 import { RoomCard } from '@/components/RoomCard'
 import { PaletteEditor } from '@/components/PaletteEditor'
+import { StyleProfileSection } from '@/components/StyleProfileSection'
 import { ProjectFormModal } from '@/components/ProjectFormModal'
 import { RoomFormModal } from '@/components/RoomFormModal'
 import { getSupabaseBrowserClient } from '@/lib/supabase/client'
-import { getMyRole, getProject, listItemsByProject, listRooms } from '@/lib/queries'
-import type { Item, MemberRole, PaletteEntry, Project, Room } from '@/lib/types'
+import {
+  getMyRole,
+  getProject,
+  listItemsByProject,
+  listRooms,
+  listStyleReferences,
+} from '@/lib/queries'
+import type { Item, MemberRole, PaletteEntry, Project, Room, StyleReference } from '@/lib/types'
 
 export default function ProjectDashboardPage() {
   const params = useParams<{ projectId: string }>()
@@ -24,6 +31,7 @@ export default function ProjectDashboardPage() {
   const [role, setRole] = useState<MemberRole | null>(null)
   const [rooms, setRooms] = useState<Room[]>([])
   const [items, setItems] = useState<Item[]>([])
+  const [styleRefs, setStyleRefs] = useState<StyleReference[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [editingProject, setEditingProject] = useState(false)
@@ -35,16 +43,18 @@ export default function ProjectDashboardPage() {
       try {
         const supabase = getSupabaseBrowserClient()
         const { data: auth } = await supabase.auth.getUser()
-        const [proj, myRole, roomRows, itemRows] = await Promise.all([
+        const [proj, myRole, roomRows, itemRows, refRows] = await Promise.all([
           getProject(supabase, projectId),
           auth.user ? getMyRole(supabase, projectId, auth.user.id) : Promise.resolve(null),
           listRooms(supabase, projectId),
           listItemsByProject(supabase, projectId),
+          listStyleReferences(supabase, projectId),
         ])
         setProject(proj)
         setRole(myRole)
         setRooms(roomRows)
         setItems(itemRows)
+        setStyleRefs(refRows)
         setError(null)
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Could not load the project.')
@@ -115,6 +125,13 @@ export default function ProjectDashboardPage() {
           </p>
         </Card>
       )}
+
+      <StyleProfileSection
+        project={project}
+        references={styleRefs}
+        canEdit={canEdit}
+        onChanged={() => void refresh({ silent: true })}
+      />
 
       <Card padding="lg">
         <PaletteEditor

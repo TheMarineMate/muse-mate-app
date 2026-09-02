@@ -8,6 +8,7 @@ import type {
   Placement,
   Project,
   Room,
+  StyleReference,
 } from './types'
 
 // Thin, typed wrappers around the Supabase calls the app makes. RLS (Phase 2)
@@ -135,6 +136,29 @@ export async function setProjectPalette(
   palette: PaletteEntry[]
 ): Promise<Project> {
   return updateProject(supabase, projectId, { palette })
+}
+
+// --- style references (Phase 6) --------------------------------------------
+
+export async function listStyleReferences(
+  supabase: SupabaseClient,
+  projectId: string
+): Promise<StyleReference[]> {
+  const { data, error } = await supabase
+    .from('style_references')
+    .select('*')
+    .eq('project_id', projectId)
+    .order('created_at', { ascending: true })
+  if (error) throw error
+  return (data ?? []) as StyleReference[]
+}
+
+export async function deleteStyleReference(
+  supabase: SupabaseClient,
+  referenceId: string
+): Promise<void> {
+  const { error } = await supabase.from('style_references').delete().eq('id', referenceId)
+  if (error) throw error
 }
 
 // --- rooms -------------------------------------------------------------------
