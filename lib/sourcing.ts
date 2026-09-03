@@ -11,7 +11,15 @@ export type Listing = {
   width_in: number | null
   depth_in: number | null
   height_in: number | null
+  /** true only when the engine confirmed this exact price on a page it fetched
+   *  this turn (priceInPage). Almost always false for presented options, since
+   *  retailer PDPs client-render the price. Drives whether "Log this" needs a
+   *  human confirm step. */
+  priceVerified: boolean
 }
+
+/** How a sourced price was vouched for (persisted to items.price_confirmation). */
+export type PriceConfirmation = 'fetch_verified' | 'human_confirmed'
 
 export type ConversationMessage = { role: 'user' | 'assistant'; content: string }
 
@@ -96,6 +104,7 @@ export function validateListing(raw: unknown): Listing | null {
     width_in: toDimension(r.width_in),
     depth_in: toDimension(r.depth_in),
     height_in: toDimension(r.height_in),
+    priceVerified: r.priceVerified === true,
   }
 }
 
@@ -133,11 +142,19 @@ export function validateOptions(raw: unknown): Listing[] {
 
 /** Factual note written to the item — composed from structured fields only, so
  *  no model prose reaches the database (Section 21 tone rails). */
-export function composeSourcingNote(chosen: Listing, alternatives: Listing[]): string {
+export function composeSourcingNote(
+  chosen: Listing,
+  alternatives: Listing[],
+  confirmation: PriceConfirmation = 'fetch_verified'
+): string {
   const money = (n: number) => `$${Math.round(n).toLocaleString('en-US')}`
   let note = `Sourced by assistant: ${chosen.title}`
   if (chosen.retailer) note += ` — ${chosen.retailer}`
   note += `, ${money(chosen.price)}.`
+  note +=
+    confirmation === 'human_confirmed'
+      ? ' Price confirmed by a project editor.'
+      : ' Price verified on the retailer page.'
   if (alternatives.length > 0) {
     note +=
       ' Alternatives: ' +
@@ -145,4 +162,28 @@ export function composeSourcingNote(chosen: Listing, alternatives: Listing[]): s
       '.'
   }
   return note.slice(0, 800)
+}
+
+/** The items-table patch for a sourced listing — shared by the model path
+ *  (submit_sourcing, fetch_verified) and the human-confirm path
+ *  (/api/sourcing/log, human_confirmed). Structured fields only. */
+export function buildSourcedItemFields(
+  chosen: Listing,
+  alternatives: Listing[],
+  confirmation: PriceConfirmation
+): Record<string, unknown> {
+  const dims: Record<string, number> = {}
+  if (chosen.width_in != null) dims.width = chosen.width_in
+  if (chosen.depth_in != null) dims.depth = chosen.depth_in
+  if (chosen.height_in != null) dims.height = chosen.height_in
+  return {
+    price_estimate: chosen.price,
+    link: chosen.url,
+    note: composeSourcingNote(chosen, alternatives, confirmation),
+    status: 'sourced',
+    sourced_at: new Date().toISOString(),
+    sourced_via: 'assistant',
+    price_confirmation: confirmation,
+    ...dims,
+  }
 }

@@ -6,7 +6,7 @@ import { computeBudgetRollup, describeBudgetForPrompt, type BudgetItem } from '@
 import { mediaTypeFromPath, MAX_IMAGE_B64_BYTES } from '@/lib/style'
 import type { PaletteEntry } from '@/lib/types'
 import {
-  composeSourcingNote,
+  buildSourcedItemFields,
   validateAlternatives,
   validateListing,
   validateOptions,
@@ -228,22 +228,9 @@ export async function POST(req: Request): Promise<NextResponse<SourcingApiRespon
     })
   }
   const alternatives = validateAlternatives(submitted.alternatives)
-  const note = composeSourcingNote(chosen, alternatives)
-
-  const dimPatch: Record<string, number> = {}
-  if (chosen.width_in != null) dimPatch.width = chosen.width_in
-  if (chosen.depth_in != null) dimPatch.depth = chosen.depth_in
-  if (chosen.height_in != null) dimPatch.height = chosen.height_in
-
-  const sourcedFields = {
-    price_estimate: chosen.price,
-    link: chosen.url,
-    note,
-    status: 'sourced' as const,
-    sourced_at: new Date().toISOString(),
-    sourced_via: 'assistant' as const,
-    ...dimPatch,
-  }
+  // This path only reaches here when the engine's priceInPage rail passed, so
+  // the price is genuinely confirmed on a fetched page.
+  const sourcedFields = buildSourcedItemFields(chosen, alternatives, 'fetch_verified')
 
   // Target: the user's explicit pick wins, then the model's match, else new.
   const match = submitted.match ?? {}

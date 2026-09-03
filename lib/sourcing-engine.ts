@@ -634,23 +634,25 @@ export async function runSourcingTurn(opts: {
           return true
         })
 
-        // These options did NOT go through the page-verified price rail. Keep
-        // the model's own wording only if every surviving option's price is
-        // actually on a page we fetched this turn; otherwise strip "confirmed /
-        // verified" so the reply doesn't overstate what we know.
-        const priceVerified =
-          options.length > 0 &&
-          options.every((o) => {
-            const price = Number((o as { price_usd?: unknown }).price_usd)
-            const url = typeof o.url === 'string' ? o.url : ''
-            return priceInPage(price, fetched[normUrl(url)] ?? '')
-          })
+        // Per-option: did we actually confirm THIS price on a page fetched this
+        // turn? Almost always false (retailer PDPs client-render), but when true
+        // the client can skip the human confirm step on "Log this".
+        const annotated = options.map((o) => {
+          const price = Number((o as { price_usd?: unknown }).price_usd)
+          const url = typeof o.url === 'string' ? o.url : ''
+          return { ...o, priceVerified: priceInPage(price, fetched[normUrl(url)] ?? '') }
+        })
+
+        // Keep the model's own wording only if EVERY surviving option is
+        // price-verified; otherwise strip "confirmed / verified" so the reply
+        // doesn't overstate what we know.
+        const allVerified = annotated.length > 0 && annotated.every((o) => o.priceVerified)
         const raw = stripLimitNarration(trailingText(response.content))
-        const text = priceVerified ? raw : softenPresentedClaims(raw)
+        const text = allVerified ? raw : softenPresentedClaims(raw)
         return {
           kind: 'options',
           text: text || 'Here are the options I found.',
-          options,
+          options: annotated,
         }
       }
 

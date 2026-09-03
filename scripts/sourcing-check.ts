@@ -2,6 +2,7 @@
 // Run: npm run sourcing:check   (uses Node's built-in type stripping)
 
 import {
+  buildSourcedItemFields,
   composeSourcingNote,
   looksLikeSearchOrCategoryPage,
   validateAlternatives,
@@ -368,6 +369,27 @@ check('validateOptions: drops a search-results URL', !opts.some((o) => o.url.inc
 check('validateOptions: drops a zero-price entry', !opts.some((o) => o.price === 0))
 check('validateOptions: caps at 3 (Section 20 volume cap)', opts.length === 3)
 check('validateOptions: non-array -> []', validateOptions('nope').length === 0 && validateOptions(null).length === 0)
+
+// --- priceVerified passthrough (drives the "Log this" confirm step) ----------
+check('validateListing: priceVerified defaults false when absent', validateListing(good)?.priceVerified === false)
+check('validateListing: priceVerified true when the engine marked it', validateListing({ ...good, priceVerified: true })?.priceVerified === true)
+check('validateListing: priceVerified only honours a real boolean true', validateListing({ ...good, priceVerified: 'yes' })?.priceVerified === false)
+const vOpts = validateOptions([
+  { ...good, url: 'https://x.com/p/a', priceVerified: true },
+  { ...good, url: 'https://x.com/p/b', priceVerified: false },
+])
+check('validateOptions: carries per-option priceVerified through', vOpts[0]?.priceVerified === true && vOpts[1]?.priceVerified === false)
+
+// --- buildSourcedItemFields: the shared write patch + provenance ------------
+const human = buildSourcedItemFields(v!, [], 'human_confirmed')
+check('buildSourcedItemFields: status sourced + assistant via', human.status === 'sourced' && human.sourced_via === 'assistant')
+check('buildSourcedItemFields: records human_confirmed provenance', human.price_confirmation === 'human_confirmed')
+check('buildSourcedItemFields: carries price + link + stated dims', human.price_estimate === v!.price && human.link === v!.url && human.width === 30 && human.depth === 6)
+check('buildSourcedItemFields: no height key when the listing had none (never 0)', !('height' in human))
+check('buildSourcedItemFields: note names the human-confirm path', String(human.note).includes('confirmed by a project editor'))
+const fetched = buildSourcedItemFields(v!, [], 'fetch_verified')
+check('buildSourcedItemFields: records fetch_verified provenance', fetched.price_confirmation === 'fetch_verified')
+check('buildSourcedItemFields: fetch_verified note wording', String(fetched.note).includes('verified on the retailer page'))
 
 // --- price-provenance rail: a logged price must be on a fetched page ---------
 

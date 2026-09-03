@@ -64,6 +64,45 @@ async function postSourcing(body: {
   }
 }
 
+// The human-confirmed logging path. No model call — a direct write once the
+// person has vouched for the price (or the app already verified it). Never
+// throws; a failed request comes back as a recoverable error entry.
+async function postSourcingLog(body: {
+  roomId: string
+  listing: Listing
+  targetItemId: string | null
+  confirmation: 'human_confirmed' | 'fetch_verified'
+}): Promise<SourcingApiResponse> {
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), 30_000)
+  try {
+    const res = await fetch('/api/sourcing/log', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: ctrl.signal,
+    })
+    const raw = await res.text()
+    let parsed: unknown = null
+    try {
+      parsed = raw ? JSON.parse(raw) : null
+    } catch {
+      parsed = null
+    }
+    if (parsed && typeof parsed === 'object' && 'kind' in parsed) {
+      return parsed as SourcingApiResponse
+    }
+    return { kind: 'error', text: "Couldn't log that just now. Try again." }
+  } catch {
+    return {
+      kind: 'error',
+      text: "Couldn't reach the server to log that. Check your connection and try again.",
+    }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 // Ephemeral (spec Section 5): the transcript lives only in this component's
 // state and is re-sent each turn. Nothing is persisted but the item record.
 type Entry =
@@ -146,39 +185,86 @@ function dimsLabel(l: Listing): string | null {
 function ListingCard({
   listing,
   primary,
-  onLog,
+  onLogListing,
 }: {
   listing: Listing
   primary?: boolean
-  onLog?: (l: Listing) => void
+  /** omitted on the already-logged (sourced) card; present on candidates */
+  onLogListing?: (l: Listing, mode: 'auto' | 'human') => void
 }) {
+  const [confirming, setConfirming] = useState(false)
   const dims = dimsLabel(listing)
+  const price = formatCurrency(listing.price)
+  const link = (
+    <LinkPill href={listing.url}>{retailerLabel(listing.url, listing.retailer)}</LinkPill>
+  )
+
   return (
     <div className={primary ? 'mm-listing mm-listing--primary' : 'mm-listing'}>
       <div className="mm-listing__title">{listing.title}</div>
       <div className="mm-listing__meta">
         {listing.retailer && <span>{listing.retailer}</span>}
-        <span>{formatCurrency(listing.price)}</span>
+        <span>{price}</span>
         {dims && <span>{dims}</span>}
       </div>
-      <div className="mm-listing__actions">
-        <LinkPill href={listing.url}>{retailerLabel(listing.url, listing.retailer)}</LinkPill>
-        {onLog && (
-          <button type="button" className="mm-listing__log" onClick={() => onLog(listing)}>
-            Log this
-          </button>
-        )}
-      </div>
+
+      {confirming ? (
+        // We couldn't confirm this price on the page — so you are. Open the
+        // listing, check it, then log it. Plain, not a legal warning.
+        <div className="mm-listing__confirm">
+          <p className="mm-listing__confirm-line">
+            You&apos;re the one confirming this is <strong>{price}</strong> and in stock. Open
+            the listing to check, then log it.
+          </p>
+          <div className="mm-listing__actions">
+            {link}
+            <button
+              type="button"
+              className="mm-listing__log"
+              onClick={() => {
+                setConfirming(false)
+                onLogListing?.(listing, 'human')
+              }}
+            >
+              Confirm &amp; log
+            </button>
+            <button
+              type="button"
+              className="mm-listing__cancel"
+              onClick={() => setConfirming(false)}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="mm-listing__actions">
+          {link}
+          {onLogListing && (
+            <button
+              type="button"
+              className="mm-listing__log"
+              onClick={() =>
+                listing.priceVerified
+                  ? onLogListing(listing, 'auto')
+                  : setConfirming(true)
+              }
+            >
+              Log this
+            </button>
+          )}
+        </div>
+      )}
     </div>
   )
 }
 
 function AssistantEntry({
   result,
-  onLog,
+  onLogListing,
 }: {
   result: SourcingApiResponse
-  onLog: (l: Listing) => void
+  onLogListing: (l: Listing, mode: 'auto' | 'human') => void
 }) {
   if (result.kind === 'sourced') {
     return (
@@ -203,7 +289,7 @@ function AssistantEntry({
         </div>
         <div className="mm-sourcing__listings">
           {result.options.map((o, i) => (
-            <ListingCard key={o.url} listing={o} primary={i === 0} onLog={onLog} />
+            <ListingCard key={o.url} listing={o} primary={i === 0} onLogListing={onLogListing} />
           ))}
         </div>
       </div>
@@ -314,8 +400,28 @@ export function SourcingPanel({
     void send(input)
   }
 
-  const onLog = (l: Listing) =>
-    void send(`Log this one: ${l.title}${l.retailer ? ` from ${l.retailer}` : ''} — ${l.url}`)
+  // "Log this" on a candidate card. mode 'human' = the person confirmed it
+  // through the confirm step; mode 'auto' = the app already price-verified it
+  // (rare). Direct write, no model round-trip.
+  async function logListing(l: Listing, mode: 'auto' | 'human') {
+    if (busy) return
+    setEntries((prev) => [
+      ...prev,
+      { role: 'user', text: `Log ${l.title}${l.retailer ? ` — ${l.retailer}` : ''}` },
+    ])
+    setBusy(true)
+    scrollToEnd()
+    const result = await postSourcingLog({
+      roomId,
+      listing: l,
+      targetItemId: target === 'auto' ? null : target,
+      confirmation: mode === 'human' ? 'human_confirmed' : 'fetch_verified',
+    })
+    setEntries((prev) => [...prev, { role: 'assistant', result }])
+    setBusy(false)
+    scrollToEnd()
+    if (result.kind === 'sourced') onSourced()
+  }
 
   const targetOptions = [
     { value: 'auto', label: 'Match automatically' },
@@ -346,7 +452,7 @@ export function SourcingPanel({
                     {entry.text}
                   </div>
                 ) : (
-                  <AssistantEntry key={i} result={entry.result} onLog={onLog} />
+                  <AssistantEntry key={i} result={entry.result} onLogListing={logListing} />
                 )
               )}
               {busy && (

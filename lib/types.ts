@@ -117,6 +117,10 @@ export type Item = {
   /** set only when status reaches 'sourced' from a verified match */
   sourced_at: string | null
   sourced_via: 'manual' | 'assistant' | null
+  /** how the sourced price was confirmed — by the model (priceInPage on a
+   *  fetched page) or by a person tapping through the "Log this" confirm step.
+   *  null for manual entries and anything sourced before the feature. */
+  price_confirmation: 'fetch_verified' | 'human_confirmed' | null
   created_at: string
   updated_at: string
 }

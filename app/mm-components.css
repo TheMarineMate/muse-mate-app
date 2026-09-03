@@ -676,6 +676,39 @@ textarea.mm-control {
   background-color: var(--accent-product-hover);
 }
 
+/* Confirm step for an unverified candidate: the person vouches for the price
+   before it's logged. A quiet inset panel, not an alarm. */
+.mm-listing__confirm {
+  margin-top: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--im-radius-md, 8px);
+  border: 1px solid var(--border-color);
+  background-color: var(--bg-primary);
+}
+
+.mm-listing__confirm-line {
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.mm-listing__cancel {
+  padding: 6px 12px;
+  min-height: 32px;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  background-color: transparent;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.mm-listing__cancel:hover {
+  border-color: var(--text-muted);
+}
+
 /* No-match: informational, deliberately NOT the error style (spec Section 5) */
 .mm-sourcing__nomatch {
   padding: var(--space-3);
