@@ -294,24 +294,24 @@ check(
   /never ask the user to tell you to keep going/i.test(capPrompt)
 )
 check(
-  'system prompt: synthesise the query, never pass user phrasing verbatim',
-  /Compose the query yourself from the WHOLE conversation[\s\S]*Never pass the user's words verbatim[\s\S]*wayfair walnut stained wood king bed frame/i.test(
+  'system prompt: query = tidy the user\'s stated need, do not add to it',
+  /The query is the user's stated product need, tidied into search form[\s\S]*You are cleaning up chatty phrasing, NOT adding to it/i.test(
     capPrompt
   )
 )
 check(
   'system prompt: still asks for a specific query shape',
-  /Make the query specific[\s\S]*price ceiling/i.test(capPrompt)
+  /Still make it specific enough to return products, not categories[\s\S]*price ceiling/i.test(capPrompt)
 )
 check(
   'system prompt: style profile is for ranking, not query words',
-  /style profile is for choosing between results[\s\S]*does NOT go into the query string[\s\S]*NOT "organic cotton warm white boutique hotel king sheets"/i.test(
+  /Do not put the project style profile in the query[\s\S]*for ranking and choosing among the results[\s\S]*NOT "organic cotton warm white boutique hotel king sheets"/i.test(
     capPrompt
   )
 )
 check(
-  'system prompt: material words are literal ("all cotton" != "organic cotton")',
-  /Take material words literally[\s\S]*"All cotton" \/ "100% cotton" means fibre content, not "organic cotton"/i.test(
+  'system prompt: take words literally, do not tighten the constraint',
+  /Take the user's words literally; do not tighten their constraint[\s\S]*"All cotton" \/ "100% cotton" is fibre content, not "organic cotton"[\s\S]*"Under \$400" is not "around \$250"/i.test(
     capPrompt
   )
 )
