@@ -1,6 +1,6 @@
 'use client'
 
-import { Fragment, useEffect, useRef, useState, type FormEvent } from 'react'
+import { Fragment, useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import { Button, Card } from '@intelligent-mate/ui'
 import { Textarea } from './Textarea'
 import { SelectField } from './SelectField'
@@ -246,6 +246,7 @@ export function SourcingPanel({
   const [target, setTarget] = useState('auto')
   const [busy, setBusy] = useState(false)
   const [waitStep, setWaitStep] = useState(0)
+  const [fade, setFade] = useState({ top: false, bottom: false })
   const logRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -257,9 +258,25 @@ export function SourcingPanel({
     return () => clearInterval(id)
   }, [busy])
 
+  // Edge-fade affordance: show a top fade once the log is scrolled down, a
+  // bottom fade while content remains below. Recomputed on scroll and whenever
+  // the transcript grows. Plain scroll math so it works on Safari too.
+  const updateFade = useCallback(() => {
+    const el = logRef.current
+    if (!el) return
+    const top = el.scrollTop > 4
+    const bottom = el.scrollTop + el.clientHeight < el.scrollHeight - 4
+    setFade((f) => (f.top === top && f.bottom === bottom ? f : { top, bottom }))
+  }, [])
+
+  useEffect(() => {
+    updateFade()
+  }, [updateFade, entries, busy])
+
   function scrollToEnd() {
     requestAnimationFrame(() => {
       if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight
+      updateFade()
     })
   }
 
@@ -315,23 +332,31 @@ export function SourcingPanel({
         </p>
 
         {entries.length > 0 && (
-          <div className="mm-sourcing__log" ref={logRef}>
-            {entries.map((entry, i) =>
-              entry.role === 'user' ? (
-                <div key={i} className="mm-sourcing__msg mm-sourcing__msg--user">
-                  {entry.text}
+          <div className="mm-sourcing__scroll">
+            <div
+              className="mm-sourcing__log"
+              ref={logRef}
+              onScroll={updateFade}
+              data-fade-top={fade.top}
+              data-fade-bottom={fade.bottom}
+            >
+              {entries.map((entry, i) =>
+                entry.role === 'user' ? (
+                  <div key={i} className="mm-sourcing__msg mm-sourcing__msg--user">
+                    {entry.text}
+                  </div>
+                ) : (
+                  <AssistantEntry key={i} result={entry.result} onLog={onLog} />
+                )
+              )}
+              {busy && (
+                <div className="mm-sourcing__msg mm-sourcing__msg--assistant">
+                  <span className="mm-muted">
+                    {WAIT_MESSAGES[Math.min(waitStep, WAIT_MESSAGES.length - 1)]}
+                  </span>
                 </div>
-              ) : (
-                <AssistantEntry key={i} result={entry.result} onLog={onLog} />
-              )
-            )}
-            {busy && (
-              <div className="mm-sourcing__msg mm-sourcing__msg--assistant">
-                <span className="mm-muted">
-                  {WAIT_MESSAGES[Math.min(waitStep, WAIT_MESSAGES.length - 1)]}
-                </span>
-              </div>
-            )}
+              )}
+            </div>
           </div>
         )}
 

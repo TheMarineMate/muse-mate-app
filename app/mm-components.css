@@ -521,22 +521,56 @@ textarea.mm-control {
 }
 
 /* --- Sourcing panel ------------------------------------------------------- */
+/* The transcript reads as its own panel — a bordered, inset region distinct
+   from the reply box below it and the floor-plan accordion further down, so a
+   long conversation scrolls *inside* here rather than as one page scroll. */
+.mm-sourcing__scroll {
+  margin-bottom: var(--space-4);
+  border: 1px solid var(--border-color);
+  border-radius: var(--im-radius-md, 8px);
+  background-color: var(--bg-secondary);
+  box-shadow: inset 0 2px 6px -4px rgba(0, 0, 0, 0.2);
+  overflow: hidden; /* clip the rounded corners over the scrolling child */
+}
+
 .mm-sourcing__log {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
   /* Give the conversation the bulk of the screen; the floor plan is collapsed
      by default on this screen so it isn't competing for height. */
-  max-height: min(62vh, 560px);
+  max-height: min(58vh, 520px);
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
-  padding: var(--space-2) var(--space-1) var(--space-4);
-  margin-bottom: var(--space-3);
-  border-bottom: 1px solid var(--border-color);
-  /* Bottom fade = "there's more below" affordance when the log overflows. */
-  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 16px), transparent);
-  mask-image: linear-gradient(to bottom, #000 calc(100% - 16px), transparent);
+  padding: var(--space-3) var(--space-2);
+  /* Edge fades: a top fade once scrolled down ("more above"), a bottom fade
+     while more remains below. Both sizes are 0 until the scroll handler in
+     SourcingPanel sets the data-attrs, so a short chat that fits shows neither. */
+  --mm-fade-top: 0px;
+  --mm-fade-bottom: 0px;
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    #000 var(--mm-fade-top),
+    #000 calc(100% - var(--mm-fade-bottom)),
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    #000 var(--mm-fade-top),
+    #000 calc(100% - var(--mm-fade-bottom)),
+    transparent 100%
+  );
+}
+
+.mm-sourcing__log[data-fade-top='true'] {
+  --mm-fade-top: 28px;
+}
+
+.mm-sourcing__log[data-fade-bottom='true'] {
+  --mm-fade-bottom: 28px;
 }
 
 .mm-sourcing__msg {

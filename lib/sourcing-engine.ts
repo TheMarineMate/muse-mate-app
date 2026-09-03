@@ -136,6 +136,8 @@ export function softenPresentedClaims(text: string): string {
     .replace(/[ \t]{2,}/g, ' ')
     .replace(/\n{3,}/g, '\n\n')
     .trim()
+    // Stripping a leading "Confirmed: " can leave the sentence lowercase.
+    .replace(/^([a-z])/, (_, c: string) => c.toUpperCase())
 }
 
 /** Record every search-result URL seen this turn -> the titles it came with.
@@ -388,6 +390,8 @@ export function buildSystemPrompt(
     'When you do search:',
     '- Compose the query yourself from the WHOLE conversation. Never pass the user\'s words verbatim into web_search — chatty or fragmentary phrasing ("check Wayfair, can be any real wood, just stained walnut colour") makes a bad query. Rewrite it as: [retailer, if named] [material/finish] [product type] [size] [price ceiling]. That example becomes: "wayfair walnut stained wood king bed frame".',
     '- Make the query specific: product type + key attribute (wood, material, finish) + size + any price ceiling, e.g. "walnut king bed frame under $1000" — not "walnut bed". A precise query returns product pages directly; a vague one returns category pages.',
+    '- Build the query from what the USER asked for. The project style profile is for choosing between results and ordering them — it does NOT go into the query string. Do not bolt "boutique hotel", a mood word, a palette colour, or "organic" onto the query unless the user said it. "All cotton king sheets" -> query "all cotton king sheet set" (or "100% cotton king sheet set"), NOT "organic cotton warm white boutique hotel king sheets".',
+    '- Take material words literally. "All cotton" / "100% cotton" means fibre content, not "organic cotton" (a narrower certified thing). "Real wood" means solid or veneer, not a specific species. Don\'t narrow the user\'s constraint.',
     '- Most large retailers (IKEA, Article, Wayfair, West Elm, Home Depot, Target) render prices client-side, so web_fetch on their product pages usually returns nothing. Do not count on the fetch. Get the price from the search result. Only submit_sourcing carries a verified price. For anything you present as an option, the price is a listed figure, not a confirmed one — say "listed at $X", never "confirmed", "verified", "$X confirmed", or "I checked the page and it is $X".',
     '- Never repeat a query you have already run this turn — especially not the same query twice in a row. If a search did not get you closer, change it: a different retailer, different wording, a loosened constraint — or stop searching and use what you have. A repeated query returns the same hits and burns the whole budget.',
     '- The moment a search surfaces even one direct product-page URL, web_fetch THAT page to confirm price and stock. Do not keep searching when you already have a page worth opening. Product-page URLs contain /product/, /products/, /dp/, /listing/, /p/, or /pdp/ and usually end in an id. A /b/, /c/, /shop/, /browse/, /category/, or /market/ path is a listing page — never web_fetch one of those, and never web_fetch a search URL (?k= / ?q= / /s? / /sch/); neither resolves to a single product.',

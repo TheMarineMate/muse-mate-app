@@ -304,6 +304,18 @@ check(
   /Make the query specific[\s\S]*price ceiling/i.test(capPrompt)
 )
 check(
+  'system prompt: style profile is for ranking, not query words',
+  /style profile is for choosing between results[\s\S]*does NOT go into the query string[\s\S]*NOT "organic cotton warm white boutique hotel king sheets"/i.test(
+    capPrompt
+  )
+)
+check(
+  'system prompt: material words are literal ("all cotton" != "organic cotton")',
+  /Take material words literally[\s\S]*"All cotton" \/ "100% cotton" means fibre content, not "organic cotton"/i.test(
+    capPrompt
+  )
+)
+check(
   'system prompt: most retailers render client-side, do not count on the fetch',
   /Most large retailers[\s\S]*render prices client-side[\s\S]*Do not count on the fetch/i.test(capPrompt)
 )
@@ -439,6 +451,11 @@ check(
   'soften: a clean reply with no certainty words is unchanged',
   softenPresentedClaims('The TONSTAD King is listed at $469. Want the alternative too?') ===
     'The TONSTAD King is listed at $469. Want the alternative too?'
+)
+check(
+  'soften: re-capitalises after stripping a lowercase-following label',
+  softenPresentedClaims('Confirmed: this white organic cotton king sheet set is $189.95.') ===
+    'This white organic cotton king sheet set is $189.95.'
 )
 check(
   'soften: does not touch "confirm" in "confirm the order" / "ask to confirm"',
