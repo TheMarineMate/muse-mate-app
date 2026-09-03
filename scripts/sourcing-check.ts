@@ -12,9 +12,11 @@ import { computeBudgetRollup, describeBudgetForPrompt } from '../lib/budget.ts'
 import {
   buildSourcingMessages,
   buildSystemPrompt,
+  finishConflict,
   looksLikeSearchLimitNarration,
   normUrl,
   priceInPage,
+  softenPresentedClaims,
   type SourcingStyleContext,
 } from '../lib/sourcing-engine.ts'
 
@@ -306,8 +308,8 @@ check(
   /Most large retailers[\s\S]*render prices client-side[\s\S]*Do not count on the fetch/i.test(capPrompt)
 )
 check(
-  'system prompt: empty fetch -> price is unconfirmed, never say "confirmed"',
-  /if the fetch of that page comes back empty, say the price is unconfirmed[\s\S]*do not write "confirmed"/i.test(
+  'system prompt: presented prices are "listed", never "confirmed"/"verified"',
+  /Only submit_sourcing carries a verified price[\s\S]*the price is a listed figure, not a confirmed one[\s\S]*never "confirmed", "verified"/i.test(
     capPrompt
   )
 )
@@ -316,8 +318,14 @@ check(
   /web_fetch returns little or no page text[\s\S]*you have NOT read that page[\s\S]*Do not state a price/i.test(capPrompt)
 )
 check(
-  'system prompt: no repeated queries',
-  /Never issue the same query twice/i.test(capPrompt)
+  'system prompt: no repeated queries, especially not back-to-back',
+  /Never repeat a query you have already run this turn — especially not the same query twice in a row/i.test(capPrompt)
+)
+check(
+  'system prompt: option title and URL must come from the same search result',
+  /Each option's title and its URL must come from the SAME search result[\s\S]*URL slug says "white-stained-oak", the title is not "dark-brown"/i.test(
+    capPrompt
+  )
 )
 check(
   'system prompt: present options via the tool, keep the text to 1-2 sentences',
@@ -378,6 +386,65 @@ check('priceInPage: zero / NaN price -> false', !priceInPage(0, PAGE) && !priceI
 
 check('normUrl: strips protocol/www/query/hash/trailing-slash', normUrl('HTTPS://www.Article.com/product/25632/basi/?ref=x#top') === 'article.com/product/25632/basi')
 check('normUrl: two forms of the same URL collapse', normUrl('http://example.com/p/1') === normUrl('https://example.com/p/1/'))
+
+// --- finishConflict: card title must not contradict the page it links -------
+check(
+  'finishConflict: "dark-brown veneer" title vs a white-stained-oak URL slug -> conflict',
+  finishConflict(
+    'ikea.com/us/en/p/malm-bed-frame-white-stained-oak-veneer-s59022590',
+    'MALM Bed frame, dark-brown veneer/Lurõy, King'
+  )
+)
+check(
+  'finishConflict: consistent brown-walnut title + slug -> no conflict',
+  !finishConflict(
+    'ikea.com/us/en/p/radmansoe-bed-frame-brown-walnut-effect-luroey-s69598638',
+    'RÅDMANSÖ bed frame, brown walnut effect/Luröy, King'
+  )
+)
+check(
+  'finishConflict: title finish word appears in the slug -> no conflict',
+  !finishConflict('example.com/p/oak-console-h123', 'Mid-century oak console table')
+)
+check(
+  'finishConflict: no finish word on one side -> never a conflict',
+  !finishConflict('example.com/p/hemnes-bed-frame-s12345', 'HEMNES Bed frame, King') &&
+    !finishConflict('example.com/p/walnut-king-bed', 'Solid wood platform bed, King')
+)
+check(
+  'finishConflict: checks against the search-result title too',
+  finishConflict('MALM Bed frame, white stained oak veneer, King - IKEA', 'MALM Bed frame, espresso, King')
+)
+
+// --- softenPresentedClaims: presented options are "listed", not "confirmed" --
+check(
+  'soften: strips a leading "Confirmed:" label',
+  softenPresentedClaims('Confirmed: RÅDMANSÖ King is $379, walnut effect, with real dimensions.') ===
+    'RÅDMANSÖ King is $379, walnut effect, with real dimensions.'
+)
+check(
+  'soften: "I\'ve verified the price" -> "I found the price"',
+  softenPresentedClaims("I've verified the price on the product page.") ===
+    'I found the price on the product page.'
+)
+check(
+  'soften: "confirmed that it is in stock" -> "found that it is in stock"',
+  softenPresentedClaims('I confirmed that it is in stock at $409.') === 'I found that it is in stock at $409.'
+)
+check(
+  'soften: bare "verified" adjective -> "listed"',
+  softenPresentedClaims('This is a verified listing at $299.') === 'This is a listed listing at $299.'
+)
+check(
+  'soften: a clean reply with no certainty words is unchanged',
+  softenPresentedClaims('The TONSTAD King is listed at $469. Want the alternative too?') ===
+    'The TONSTAD King is listed at $469. Want the alternative too?'
+)
+check(
+  'soften: does not touch "confirm" in "confirm the order" / "ask to confirm"',
+  softenPresentedClaims('Say the word and I can confirm the order.') ===
+    'Say the word and I can confirm the order.'
+)
 
 console.log(`\n${fail === 0 ? 'SOURCING + PROMPT CHECK PASSED' : 'SOURCING + PROMPT CHECK FAILED'} (${pass} passed, ${fail} failed)`)
 process.exit(fail === 0 ? 0 : 1)

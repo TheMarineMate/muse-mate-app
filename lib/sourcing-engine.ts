@@ -79,6 +79,79 @@ export function priceInPage(price: number, pageText: string): boolean {
   return false
 }
 
+/**
+ * Finish / colour words that, if the model's option title and the product URL
+ * (or the search-result title) name *different* ones, mean the card was
+ * described from something other than that page — the MALM "dark-brown veneer"
+ * title on a `...white-stained-oak-veneer...` URL bug. "veneer", "stained",
+ * "effect", "solid", "wood" are neutral and excluded — only a real colour
+ * disagreement is a conflict.
+ */
+const FINISH_WORDS = new Set([
+  'white', 'black', 'grey', 'gray', 'brown', 'walnut', 'oak', 'ash', 'birch',
+  'pine', 'espresso', 'cherry', 'maple', 'beige', 'cream', 'ivory', 'tan',
+  'navy', 'charcoal', 'mahogany', 'teak', 'honey', 'amber', 'gold', 'brass',
+  'bronze', 'silver', 'chrome', 'nickel', 'copper', 'natural', 'rustic',
+  'blue', 'green', 'red', 'pink', 'sage', 'olive', 'taupe', 'mocha',
+])
+
+function finishTokens(s: string): string[] {
+  const out: string[] = []
+  for (const w of String(s).toLowerCase().split(/[^a-z]+/)) {
+    // "dark-brown" splits to "dark" (non-signal) + "brown"; "dark"/"light" are
+    // not in FINISH_WORDS so only the real colour counts.
+    if (FINISH_WORDS.has(w) && !out.includes(w)) out.push(w)
+  }
+  return out
+}
+
+/**
+ * True when `title` names a finish colour that `reference` (a URL slug or the
+ * search-result title for that same URL) contradicts — both sides name finishes
+ * and they are completely disjoint. Neutral or missing finishes never conflict.
+ */
+export function finishConflict(reference: string, title: string): boolean {
+  const a = finishTokens(reference)
+  const b = finishTokens(title)
+  if (a.length === 0 || b.length === 0) return false
+  return !b.some((w) => a.includes(w))
+}
+
+/**
+ * Strip certainty language ("Confirmed:", "I've verified", "verified the
+ * price") from a presented-options reply. These options have NOT been through
+ * the page-verified price rail submit_sourcing requires, so the reply must not
+ * assert the price as confirmed — it is a listing, not a verified fact.
+ */
+export function softenPresentedClaims(text: string): string {
+  return text
+    .replace(/(^|[.!?]\s+|\n)[ \t]*(?:confirmed|verified)\b[ \t]*[:—–-]?[ \t]*/gi, '$1')
+    .replace(/\bI(?:['’]ve| have)?\s+(?:just\s+|now\s+)?(?:confirmed|verified)\b/gi, 'I found')
+    .replace(
+      /\b(?:confirmed|verified)\s+(that|the|its?|it|this|price|pricing|stock|availability|dimensions|measurements)\b/gi,
+      'found $1'
+    )
+    .replace(/\b(?:price|pricing|stock|availability)\s+(?:is\s+)?(?:confirmed|verified)\b/gi, 'is as listed')
+    .replace(/\b(confirmed|verified)\b/gi, 'listed')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
+/** Record every search-result URL seen this turn -> the titles it came with.
+ *  A presented option whose URL never appeared here was not found by search. */
+function collectSearchResults(content: unknown, into: Record<string, string[]>): void {
+  if (!Array.isArray(content)) return
+  for (const b of content as Record<string, unknown>[]) {
+    if (b.type !== 'web_search_tool_result' || !Array.isArray(b.content)) continue
+    for (const r of b.content as { url?: string; title?: string }[]) {
+      const key = normUrl(String(r.url ?? ''))
+      if (!key) continue
+      ;(into[key] ??= []).push(String(r.title ?? ''))
+    }
+  }
+}
+
 /** Pull readable page text out of a web_fetch_tool_result block, keyed by URL.
  *  Errors (url_not_allowed etc.) and JS-shell pages contribute nothing. */
 function collectFetched(content: unknown, into: Record<string, string>): void {
@@ -315,8 +388,8 @@ export function buildSystemPrompt(
     'When you do search:',
     '- Compose the query yourself from the WHOLE conversation. Never pass the user\'s words verbatim into web_search — chatty or fragmentary phrasing ("check Wayfair, can be any real wood, just stained walnut colour") makes a bad query. Rewrite it as: [retailer, if named] [material/finish] [product type] [size] [price ceiling]. That example becomes: "wayfair walnut stained wood king bed frame".',
     '- Make the query specific: product type + key attribute (wood, material, finish) + size + any price ceiling, e.g. "walnut king bed frame under $1000" — not "walnut bed". A precise query returns product pages directly; a vague one returns category pages.',
-    '- Most large retailers (IKEA, Article, Wayfair, West Elm, Home Depot, Target) render prices client-side, so web_fetch on their product pages usually returns nothing. Do not count on the fetch. Get the price from the search result, and if the fetch of that page comes back empty, say the price is unconfirmed — do not write "confirmed" or "verified".',
-    '- Never issue the same query twice. If a search did not get you closer, change it — a different retailer, different wording, a loosened constraint — or stop searching and use what you have. Repeating a query wastes the whole budget.',
+    '- Most large retailers (IKEA, Article, Wayfair, West Elm, Home Depot, Target) render prices client-side, so web_fetch on their product pages usually returns nothing. Do not count on the fetch. Get the price from the search result. Only submit_sourcing carries a verified price. For anything you present as an option, the price is a listed figure, not a confirmed one — say "listed at $X", never "confirmed", "verified", "$X confirmed", or "I checked the page and it is $X".',
+    '- Never repeat a query you have already run this turn — especially not the same query twice in a row. If a search did not get you closer, change it: a different retailer, different wording, a loosened constraint — or stop searching and use what you have. A repeated query returns the same hits and burns the whole budget.',
     '- The moment a search surfaces even one direct product-page URL, web_fetch THAT page to confirm price and stock. Do not keep searching when you already have a page worth opening. Product-page URLs contain /product/, /products/, /dp/, /listing/, /p/, or /pdp/ and usually end in an id. A /b/, /c/, /shop/, /browse/, /category/, or /market/ path is a listing page — never web_fetch one of those, and never web_fetch a search URL (?k= / ?q= / /s? / /sch/); neither resolves to a single product.',
     '- If web_fetch returns little or no page text (a blocked or client-rendered page — common on Article, Wayfair, Home Depot), you have NOT read that page. Do not state a price, stock status, or dimensions from it. Either fall back to a listing whose price is stated in the search result, or treat it as not verifiable and move on.',
     '- Every URL you log MUST be a direct, single-product page. A search-results page, a category / "shop by" / "browse" / "shop all" page, or a page listing many products is NOT a listing.',
@@ -327,7 +400,8 @@ export function buildSystemPrompt(
     '- Give width, depth, height in inches for a listing ONLY if the page states them. Use 0 otherwise. Never estimate dimensions. Never invent a price or a link.',
     '',
     'Presenting and logging:',
-    '- After a search, call present_sourcing_options with your 1-3 candidates. Put the retailer, price, dimensions, and URL in the tool call — NOT in your text. Keep your text to one or two short sentences: name your top pick and its price, and ask whether to log it or see the alternatives.',
+    '- After a search, call present_sourcing_options with your 1-3 candidates. Put the retailer, price, dimensions, and URL in the tool call — NOT in your text. Keep your text to one or two short sentences: name your top pick and its listed price, and ask whether to log it or see the alternatives.',
+    "- Each option's title and its URL must come from the SAME search result. Take the title from that result; do not describe a colour, wood, or finish the result's own title and URL don't say. If the URL slug says \"white-stained-oak\", the title is not \"dark-brown\".",
     '- Call submit_sourcing only after the user picks an option, OR when they explicitly asked you to just find and log the best match without reviewing. Never log an item the user has not chosen.',
     '- submit_sourcing must be a verified listing: a real single-product URL you web_fetch\'d this turn, with its price visible in that page\'s text. If you could not open the page (blocked / client-rendered), do not submit it — say you couldn\'t confirm the price and suggest a store whose prices show in search.',
     '- Set match.kind = "existing" + match.item_id if the pick clearly matches an item on the room list above; otherwise match.kind = "new" with a short match.item_name.',
@@ -498,6 +572,10 @@ export async function runSourcingTurn(opts: {
   // ground truth we can check a submitted price against (search snippets are
   // encrypted server-side).
   const fetched: Record<string, string> = {}
+  // Every search-result URL -> titles seen this turn. A presented option whose
+  // URL is not in here was not returned by any search; its title is checked
+  // against the search-result title for the same URL.
+  const searchResults: Record<string, string[]> = {}
 
   try {
     for (let i = 0; i <= MAX_CONTINUATIONS; i++) {
@@ -507,6 +585,7 @@ export async function runSourcingTurn(opts: {
 
       logTools(response.content, response.stop_reason)
       collectFetched(response.content, fetched)
+      collectSearchResults(response.content, searchResults)
 
       if (response.stop_reason === 'pause_turn') {
         messages.push({
@@ -519,11 +598,55 @@ export async function runSourcingTurn(opts: {
 
       const present = findTool(response.content, 'present_sourcing_options')
       if (present) {
+        const rawOptions = ((present.input as { options?: unknown }).options ?? []) as Record<
+          string,
+          unknown
+        >[]
+        // Bind each card's title to its own product page: drop any option whose
+        // URL was never returned by a search this turn, or whose title names a
+        // finish colour the URL slug / search-result title contradicts (the
+        // model reconstructed the description instead of taking it from the
+        // page it linked).
+        const options = (Array.isArray(rawOptions) ? rawOptions : []).filter((o) => {
+          const url = typeof o.url === 'string' ? o.url : ''
+          const title = typeof o.title === 'string' ? o.title : ''
+          if (!url) return false
+          const key = normUrl(url)
+          const seenTitles = searchResults[key]
+          if (!seenTitles) {
+            if (debug) console.error(`[sourcing:option-drop] url not from search this turn: ${url}`)
+            return false
+          }
+          const slug = key.split('/').slice(1).join(' ').replace(/[^a-z]+/g, ' ')
+          const refs = [slug, ...seenTitles]
+          if (refs.some((r) => finishConflict(r, title))) {
+            if (debug) {
+              console.error(
+                `[sourcing:option-drop] title "${title}" contradicts page finish (${url})`
+              )
+            }
+            return false
+          }
+          return true
+        })
+
+        // These options did NOT go through the page-verified price rail. Keep
+        // the model's own wording only if every surviving option's price is
+        // actually on a page we fetched this turn; otherwise strip "confirmed /
+        // verified" so the reply doesn't overstate what we know.
+        const priceVerified =
+          options.length > 0 &&
+          options.every((o) => {
+            const price = Number((o as { price_usd?: unknown }).price_usd)
+            const url = typeof o.url === 'string' ? o.url : ''
+            return priceInPage(price, fetched[normUrl(url)] ?? '')
+          })
         const raw = stripLimitNarration(trailingText(response.content))
+        const text = priceVerified ? raw : softenPresentedClaims(raw)
         return {
           kind: 'options',
-          text: raw || 'Here are the options I found.',
-          options: (present.input as { options?: unknown }).options,
+          text: text || 'Here are the options I found.',
+          options,
         }
       }
 
