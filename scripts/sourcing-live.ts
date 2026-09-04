@@ -222,7 +222,9 @@ for (const userTurn of turns) {
     const opts = validateOptions(turn.options)
     console.log(`<<< [${secs}s] OPTIONS (${opts.length} valid)  reply: ${turn.text}`)
     opts.forEach((o, i) =>
-      console.log(`    ${i + 1}. ${o.title} — ${o.retailer} $${o.price}  ${o.url}`)
+      console.log(
+        `    ${i + 1}. ${o.title} — ${o.retailer} $${o.price}${o.overBudget ? ' [over budget]' : ''}${o.priceVerified ? ' [price-verified]' : ''}  ${o.url}`
+      )
     )
     history.push({
       role: 'assistant',

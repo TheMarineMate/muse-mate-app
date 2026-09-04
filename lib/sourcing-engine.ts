@@ -299,11 +299,16 @@ export const PRESENT_TOOL = {
   input_schema: {
     type: 'object',
     additionalProperties: false,
-    required: ['options'],
+    required: ['options', 'budget_ceiling_usd'],
     properties: {
+      budget_ceiling_usd: {
+        type: 'number',
+        description:
+          'The per-item price ceiling the user gave for THIS request (e.g. "under $600" -> 600, "around $400" -> 400). 0 if they gave no ceiling. The app drops any option more than ~20% over this and labels the rest that are over it.',
+      },
       options: {
         type: 'array',
-        description: '1 to 3 candidate listings, strongest first.',
+        description: '1 to 3 candidate listings, strongest first, in-budget ones first.',
         items: {
           type: 'object',
           additionalProperties: false,
@@ -412,6 +417,11 @@ export function buildSystemPrompt(
     '- You have a small, fixed number of searches per reply. If you use them up before finding solid options, present the best 1 or 2 you have. If nothing is usable, say so plainly and ask one focused question to narrow it — a material, a size range, or a store. Never mention search limits, quotas, or "this turn", and never ask the user to tell you to keep going. Just work with what you found.',
     '- If the exact spec has no in-stock match (e.g. solid walnut king under $1000 is genuinely scarce), present the closest real listings instead of nothing — a veneer or wood-finish version, or one a little over budget — and say plainly how each differs from the ask. A real near-match beats an empty result.',
     '- Give width, depth, height in inches for a listing ONLY if the page states them. Use 0 otherwise. Never estimate dimensions. Never invent a price or a link.',
+    '',
+    'Budget:',
+    '- Work out the price ceiling the user gave for THIS item ("under $600" -> 600, "around $400" -> 400, "no more than $150" -> 150). Pass it as budget_ceiling_usd on present_sourcing_options (0 if they gave none).',
+    '- Order options in-budget first. You may include ONE option up to ~20% over the ceiling if it is a clearly better fit — the app labels it "over budget" for you; still say in your one-line text that it is over. Do not present anything more than ~20% over — the app drops those anyway.',
+    '- If nothing is at or within ~20% of the ceiling, do not force a bad option. Say the closest real listings are all well over, give the rough range you saw, and ask whether to raise the ceiling.',
     '',
     'Presenting and logging:',
     '- After a search, call present_sourcing_options with your 1-3 candidates. Put the retailer, price, dimensions, and URL in the tool call — NOT in your text. Keep your text to one or two short sentences: name your top pick and its listed price, and ask whether to log it or see the alternatives.',
@@ -744,13 +754,49 @@ export async function runSourcingTurn(opts: {
           return true
         })
 
+        // Budget margin: the model reports the ceiling the user gave for this
+        // item; we drop anything more than 20% over it and flag the rest that
+        // are over. A genuinely close option ($632 vs a $600 ask) reaches the
+        // user labelled "over budget"; a wildly-over one never surfaces.
+        const ceiling = Number(
+          (present.input as { budget_ceiling_usd?: unknown }).budget_ceiling_usd
+        )
+        const hasCeiling = Number.isFinite(ceiling) && ceiling > 0
+        const OVER_BUDGET_MARGIN = 1.2
+        if (debug) {
+          const prices = options
+            .map((o) => Number((o as { price_usd?: unknown }).price_usd))
+            .filter((n) => Number.isFinite(n))
+          console.error(
+            `[sourcing:budget] ceiling=${hasCeiling ? `$${ceiling}` : 'none'} option_prices=[${prices.map((p) => `$${p}`).join(', ')}]`
+          )
+        }
+        const inMargin = hasCeiling
+          ? options.filter((o) => {
+              const p = Number((o as { price_usd?: unknown }).price_usd)
+              if (Number.isFinite(p) && p > ceiling * OVER_BUDGET_MARGIN) {
+                if (debug) {
+                  console.error(
+                    `[sourcing:option-drop] $${p} is >20% over the $${ceiling} ceiling`
+                  )
+                }
+                return false
+              }
+              return true
+            })
+          : options
+
         // Per-option: did we actually confirm THIS price on a page fetched this
         // turn? Almost always false (retailer PDPs client-render), but when true
         // the client can skip the human confirm step on "Log this".
-        const annotated = options.map((o) => {
+        const annotated = inMargin.map((o) => {
           const price = Number((o as { price_usd?: unknown }).price_usd)
           const url = typeof o.url === 'string' ? o.url : ''
-          return { ...o, priceVerified: priceInPage(price, fetched[normUrl(url)] ?? '') }
+          return {
+            ...o,
+            priceVerified: priceInPage(price, fetched[normUrl(url)] ?? ''),
+            overBudget: hasCeiling && Number.isFinite(price) && price > ceiling,
+          }
         })
 
         // Keep the model's own wording only if EVERY surviving option is

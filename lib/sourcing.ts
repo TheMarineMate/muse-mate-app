@@ -16,6 +16,10 @@ export type Listing = {
    *  retailer PDPs client-render the price. Drives whether "Log this" needs a
    *  human confirm step. */
   priceVerified: boolean
+  /** true when the price is over the ceiling the user gave for this item (but
+   *  within the 20% margin — anything further over is dropped before it gets
+   *  here). The card shows an "over budget" label. */
+  overBudget: boolean
 }
 
 /** How a sourced price was vouched for (persisted to items.price_confirmation). */
@@ -105,6 +109,7 @@ export function validateListing(raw: unknown): Listing | null {
     depth_in: toDimension(r.depth_in),
     height_in: toDimension(r.height_in),
     priceVerified: r.priceVerified === true,
+    overBudget: r.overBudget === true,
   }
 }
 

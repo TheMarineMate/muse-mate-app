@@ -16,6 +16,7 @@ import {
   finishConflict,
   looksLikeSearchLimitNarration,
   normUrl,
+  PRESENT_TOOL,
   priceInPage,
   softenPresentedClaims,
   type SourcingStyleContext,
@@ -391,6 +392,32 @@ const vOpts = validateOptions([
   { ...good, url: 'https://x.com/p/b', priceVerified: false },
 ])
 check('validateOptions: carries per-option priceVerified through', vOpts[0]?.priceVerified === true && vOpts[1]?.priceVerified === false)
+
+// --- overBudget passthrough (near-budget label) ----------------------------
+check('validateListing: overBudget defaults false', validateListing(good)?.overBudget === false)
+check('validateListing: overBudget true when the engine marked it', validateListing({ ...good, overBudget: true })?.overBudget === true)
+check('validateListing: overBudget only honours boolean true', validateListing({ ...good, overBudget: 1 })?.overBudget === false)
+const bOpts = validateOptions([
+  { ...good, url: 'https://x.com/p/a', overBudget: false },
+  { ...good, url: 'https://x.com/p/b', overBudget: true },
+])
+check('validateOptions: carries per-option overBudget through', bOpts[0]?.overBudget === false && bOpts[1]?.overBudget === true)
+
+// --- present_sourcing_options schema: budget ceiling is required -----------
+{
+  const schema = PRESENT_TOOL.input_schema as {
+    properties: Record<string, unknown>
+    required: string[]
+  }
+  check('PRESENT_TOOL: budget_ceiling_usd is a declared property', 'budget_ceiling_usd' in schema.properties)
+  check('PRESENT_TOOL: budget_ceiling_usd is required (strict mode)', schema.required.includes('budget_ceiling_usd'))
+}
+check(
+  'system prompt: 20% budget margin — ceiling field, in-budget first, one near-over, drop wildly over',
+  /Budget:[\s\S]*budget_ceiling_usd on present_sourcing_options[\s\S]*in-budget first[\s\S]*up to ~20% over the ceiling[\s\S]*more than ~20% over/i.test(
+    buildSystemPrompt('R', null, [], 'target $5,000, planned $0, committed $0, received $0, $5,000 left')
+  )
+)
 
 // --- buildSourcedItemFields: the shared write patch + provenance ------------
 const human = buildSourcedItemFields(v!, [], 'human_confirmed')

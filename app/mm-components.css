@@ -626,9 +626,21 @@ textarea.mm-control {
 .mm-listing__meta {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: var(--space-1) var(--space-3);
   font-size: var(--text-xs);
   color: var(--text-muted);
+}
+
+/* Honest label on a near-budget option (within the 20% margin; further over is
+   dropped upstream). Not an error colour — just a flag. */
+.mm-listing__overbudget {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background-color: var(--warning-bg, var(--bg-tertiary));
+  color: var(--warning-text, var(--text-secondary));
+  font-weight: 600;
+  letter-spacing: 0.01em;
 }
 
 .mm-listing__actions {

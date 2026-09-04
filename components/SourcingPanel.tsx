@@ -205,6 +205,7 @@ function ListingCard({
       <div className="mm-listing__meta">
         {listing.retailer && <span>{listing.retailer}</span>}
         <span>{price}</span>
+        {listing.overBudget && <span className="mm-listing__overbudget">over budget</span>}
         {dims && <span>{dims}</span>}
       </div>
 
