@@ -15,10 +15,11 @@ import {
 } from '@/lib/sourcing'
 
 export const runtime = 'nodejs'
-// Search turns (web_search + web_fetch) can take a while. Needs a Vercel plan
-// that allows >60s functions (Pro+); the engine's own 90s abort keeps a turn
-// under this ceiling.
-export const maxDuration = 120
+// Search turns (web_search + web_fetch) can take a while, and the engine may
+// retry a stalled first response (45s + 45s) before its 150s whole-turn
+// ceiling. This sits above that with headroom for the Supabase preamble.
+// Needs a Vercel plan allowing long functions (Pro+, project max is 300s).
+export const maxDuration = 200
 
 const STYLE_BUCKET = 'style-references'
 // Cap on reference photos re-sent to the model each sourcing turn — bounds cost

@@ -16,9 +16,9 @@ const WAIT_MESSAGES = [
   'Still going…',
 ]
 
-// A bit above the server route's 120s maxDuration, so a genuinely hung request
+// A bit above the server route's 200s maxDuration, so a genuinely hung request
 // fails with a clear message instead of spinning forever on mobile.
-const CLIENT_TIMEOUT_MS = 125_000
+const CLIENT_TIMEOUT_MS = 210_000
 
 async function postSourcing(body: {
   roomId: string

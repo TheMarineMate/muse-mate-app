@@ -335,6 +335,18 @@ check(
   /Never repeat a query you have already run this turn — especially not the same query twice in a row/i.test(capPrompt)
 )
 check(
+  'system prompt: only web_fetch a URL seen in a search result this turn',
+  /ONLY web_fetch a URL that appeared verbatim in a search result this turn[\s\S]*Never construct, guess, or complete a product URL/i.test(
+    capPrompt
+  )
+)
+check(
+  'system prompt: all-category results mean the query is too broad — narrow, do not repeat',
+  /If a search comes back all category[\s\S]*the query is too broad[\s\S]*Do NOT run it again[\s\S]*Narrow it/i.test(
+    capPrompt
+  )
+)
+check(
   'system prompt: option title and URL must come from the same search result',
   /Each option's title and its URL must come from the SAME search result[\s\S]*URL slug says "white-stained-oak", the title is not "dark-brown"/i.test(
     capPrompt

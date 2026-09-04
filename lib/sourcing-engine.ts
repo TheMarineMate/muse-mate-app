@@ -31,11 +31,19 @@ export type SourcingImage = { media_type: UploadImageMime; data: string }
 // continuation turn, which the tone-rail fix already removed.)
 const MAX_CONTINUATIONS = 2
 
-// Hard ceiling on one turn's model + tool work. ~35s under the route's 120s
-// maxDuration leaves room for the Supabase preamble + response serialization —
-// a stuck turn returns a clean message, never a 504 or an indefinite spinner.
+// Hard ceiling on one turn's model + tool work. Sits under the route's
+// maxDuration (200s) with room for the Supabase preamble + serialization — a
+// stuck turn returns a clean status, never a 504 or an indefinite spinner.
 // Overridable via env for tuning without a deploy.
-const ENGINE_TIMEOUT_MS = Number(process.env.SOURCING_TIMEOUT_MS) || 85_000
+const ENGINE_TIMEOUT_MS = Number(process.env.SOURCING_TIMEOUT_MS) || 150_000
+
+// If the model's FIRST response hasn't come back in this long, the request has
+// most likely stalled — observed intermittently as pure dead air, no error, no
+// tool call, `.finalMessage()` never resolving until the hard ceiling. Abort
+// that attempt and retry once; a fresh request almost always returns promptly.
+// Only the first response is guarded this way — continuations run under the
+// remaining whole-turn budget.
+const FIRST_RESPONSE_RETRY_MS = Number(process.env.SOURCING_FIRST_RESPONSE_MS) || 45_000
 
 /**
  * The model, on running out of searches mid-turn, tends to narrate the limit
@@ -395,6 +403,8 @@ export function buildSystemPrompt(
     '- Most large retailers (IKEA, Article, Wayfair, West Elm, Home Depot, Target) render prices client-side, so web_fetch on their product pages usually returns nothing. Do not count on the fetch. Get the price from the search result. Only submit_sourcing carries a verified price. For anything you present as an option, the price is a listed figure, not a confirmed one — say "listed at $X", never "confirmed", "verified", "$X confirmed", or "I checked the page and it is $X".',
     '- Never repeat a query you have already run this turn — especially not the same query twice in a row. If a search did not get you closer, change it: a different retailer, different wording, a loosened constraint — or stop searching and use what you have. A repeated query returns the same hits and burns the whole budget.',
     '- The moment a search surfaces even one direct product-page URL, web_fetch THAT page to confirm price and stock. Do not keep searching when you already have a page worth opening. Product-page URLs contain /product/, /products/, /dp/, /listing/, /p/, or /pdp/ and usually end in an id. A /b/, /c/, /shop/, /browse/, /category/, or /market/ path is a listing page — never web_fetch one of those, and never web_fetch a search URL (?k= / ?q= / /s? / /sch/); neither resolves to a single product.',
+    '- ONLY web_fetch a URL that appeared verbatim in a search result this turn. Never construct, guess, or complete a product URL — that fetch just fails.',
+    '- If a search comes back all category / "shop" / keyword pages and no product page, the query is too broad. Do NOT run it again or a near-identical one. Narrow it: add the material, a brand, a specific price like "$549", or the word "review". Two broad searches in a row wastes the budget — change shape or stop.',
     '- If web_fetch returns little or no page text (a blocked or client-rendered page — common on Article, Wayfair, Home Depot), you have NOT read that page. Do not state a price, stock status, or dimensions from it. Either fall back to a listing whose price is stated in the search result, or treat it as not verifiable and move on.',
     '- Every URL you log MUST be a direct, single-product page. A search-results page, a category / "shop by" / "browse" / "shop all" page, or a page listing many products is NOT a listing.',
     '- Read each candidate product page. If it shows discontinued, no longer available, out of stock, sold out, or currently unavailable, do not log it — find another.',
@@ -482,7 +492,13 @@ export async function runSourcingTurn(opts: {
   // A sourcing reply is a short list of options or one clarifying question, but
   // give the model headroom for tool-call planning between searches; 4096 is
   // well under the old 8192 without risking a truncated multi-option reply.
-  const common = { model, max_tokens: 4096, system, output_config: { effort: 'medium' } } as const
+  // `effort` trades first-token latency for planning depth. 'medium' was the
+  // cause of the "every other turn comes back empty" reports: on a broad or
+  // vague query it spent 45-100s+ deliberating before its first tool call, and
+  // the whole-turn ceiling ate that as a silent no_match. 'low' returns in
+  // ~20-30s with the same search strategy in practice. Overridable for tuning.
+  const effort = (process.env.SOURCING_EFFORT || 'low') as 'low' | 'medium' | 'high'
+  const common = { model, max_tokens: 4096, system, output_config: { effort } } as const
 
   const controller = new AbortController()
   let aborted = false
@@ -581,13 +597,107 @@ export async function runSourcingTurn(opts: {
   // against the search-result title for the same URL.
   const searchResults: Record<string, string[]> = {}
 
+  // Per-turn instrumentation. web_search / web_fetch usage is per API request
+  // (each turn is its own request), NOT shared across the conversation — the
+  // message history we send back is plain text, no prior tool blocks. This
+  // summary makes that visible turn-by-turn: search count, any server-tool
+  // rate/quota errors, stop_reason sequence, Anthropic's own usage counters.
+  const t0 = Date.now()
+  const stats = {
+    searches: 0,
+    fetches: 0,
+    searchErrors: [] as string[],
+    fetchErrors: [] as string[],
+    stops: [] as string[],
+    usage: [] as string[],
+    retried: false,
+  }
+  const finish = (o: TurnOutcome): TurnOutcome => {
+    if (debug) {
+      console.error(
+        `[sourcing:turn-summary] outcome=${o.kind} searches=${stats.searches} fetches=${stats.fetches} ` +
+          `continuations=${Math.max(stats.stops.length - 1, 0)} retried=${stats.retried} ` +
+          `stops=[${stats.stops.join(',')}] search_errors=[${stats.searchErrors.join(' ; ') || '-'}] ` +
+          `fetch_errors=[${stats.fetchErrors.join(',') || '-'}] ` +
+          `usage=[${stats.usage.join(' | ') || '-'}] elapsed=${Math.round((Date.now() - t0) / 1000)}s`
+      )
+    }
+    return o
+  }
+
+  // Guard only the FIRST response against a silent stall: race it against
+  // FIRST_RESPONSE_RETRY_MS and, on a stall, abort that attempt and try once
+  // more before falling back to a timeout. Continuations aren't guarded here —
+  // by then the model is mid-tool-loop and the whole-turn ceiling covers it.
+  const firstResponseWithRetry = async (): Promise<Anthropic.Message> => {
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      const attemptAc = new AbortController()
+      const relayAbort = () => attemptAc.abort()
+      controller.signal.addEventListener('abort', relayAbort)
+      const soft = setTimeout(() => attemptAc.abort(), FIRST_RESPONSE_RETRY_MS)
+      try {
+        return await client.messages
+          .stream({ ...common, messages, tools }, { signal: attemptAc.signal })
+          .finalMessage()
+      } catch (e) {
+        if (aborted) throw e // whole-turn ceiling hit — caller returns timeout
+        if (attemptAc.signal.aborted) {
+          // soft-timeout stall. attempt 1 -> retry; attempt 2 -> fall out of the
+          // loop to the clean-timeout path below (never a raw 502).
+          if (attempt === 1) {
+            stats.retried = true
+            if (debug) {
+              console.error(
+                `[sourcing:retry] first response stalled >${FIRST_RESPONSE_RETRY_MS / 1000}s — retrying once`
+              )
+            }
+          }
+          continue
+        }
+        throw e
+      } finally {
+        clearTimeout(soft)
+        controller.signal.removeEventListener('abort', relayAbort)
+      }
+    }
+    aborted = true // both attempts stalled: fall through to a clean timeout
+    controller.abort()
+    throw new Error('sourcing: first response stalled on both attempts')
+  }
+  const tally = (response: Anthropic.Message) => {
+    stats.stops.push(String(response.stop_reason ?? '?'))
+    const stu = (
+      response.usage as { server_tool_use?: { web_search_requests?: number } } | undefined
+    )?.server_tool_use
+    if (stu) stats.usage.push(`web_search_requests=${stu.web_search_requests ?? '?'}`)
+    for (const b of response.content as unknown as Record<string, unknown>[]) {
+      if (b.type === 'server_tool_use' && b.name === 'web_search') stats.searches++
+      if (b.type === 'server_tool_use' && b.name === 'web_fetch') stats.fetches++
+      if (b.type === 'web_search_tool_result' && !Array.isArray(b.content)) {
+        stats.searchErrors.push(JSON.stringify(b.content).slice(0, 160))
+      }
+      if (b.type === 'web_fetch_tool_result') {
+        const c = b.content as { error_code?: string } | undefined
+        if (c?.error_code) stats.fetchErrors.push(String(c.error_code))
+      }
+    }
+    if (debug) {
+      console.error(
+        `[sourcing:usage] stop=${response.stop_reason} searches_so_far=${stats.searches} ` +
+          `fetches_so_far=${stats.fetches}${stu ? ` billed_web_search_requests=${stu.web_search_requests}` : ''}`
+      )
+    }
+  }
+
   try {
     for (let i = 0; i <= MAX_CONTINUATIONS; i++) {
-      const response = await client.messages
-        .stream({ ...common, messages, tools }, reqOpts)
-        .finalMessage()
+      const response =
+        i === 0
+          ? await firstResponseWithRetry()
+          : await client.messages.stream({ ...common, messages, tools }, reqOpts).finalMessage()
 
       logTools(response.content, response.stop_reason)
+      tally(response)
       collectFetched(response.content, fetched)
       collectSearchResults(response.content, searchResults)
 
@@ -596,7 +706,7 @@ export async function runSourcingTurn(opts: {
           role: 'assistant',
           content: response.content as unknown as Anthropic.ContentBlockParam[],
         })
-        if (i === MAX_CONTINUATIONS) return { kind: 'timeout' } // still mid-search
+        if (i === MAX_CONTINUATIONS) return finish({ kind: 'timeout' }) // still mid-search
         continue
       }
 
@@ -649,11 +759,11 @@ export async function runSourcingTurn(opts: {
         const allVerified = annotated.length > 0 && annotated.every((o) => o.priceVerified)
         const raw = stripLimitNarration(trailingText(response.content))
         const text = allVerified ? raw : softenPresentedClaims(raw)
-        return {
+        return finish({
           kind: 'options',
           text: text || 'Here are the options I found.',
           options: annotated,
-        }
+        })
       }
 
       const toolUse = findTool(response.content, 'submit_sourcing')
@@ -671,10 +781,10 @@ export async function runSourcingTurn(opts: {
                 `[sourcing:unverified] price ${price} not found on fetched text for ${listing.url} (have ${pageText.length} chars)`
               )
             }
-            return { kind: 'unverified' }
+            return finish({ kind: 'unverified' })
           }
         }
-        return { kind: 'submit', submitted }
+        return finish({ kind: 'submit', submitted })
       }
 
       // Plain reply — conversational turn (with or without a search this turn).
@@ -686,14 +796,17 @@ export async function runSourcingTurn(opts: {
       // back a clean status. But if the model DID land priced options, keep
       // those — just with the "I hit my limit" line stripped out.
       if (!hasSubstance && (looksLikeSearchLimitNarration(raw) || hitToolUsageCap(response.content))) {
-        return { kind: 'exhausted' }
+        if (debug && hitToolUsageCap(response.content)) {
+          console.error('[sourcing:tool-cap] a server tool reported a usage/rate cap this turn')
+        }
+        return finish({ kind: 'exhausted' })
       }
 
-      return { kind: 'message', text: text || FALLBACK_MESSAGE }
+      return finish({ kind: 'message', text: text || FALLBACK_MESSAGE })
     }
-    return { kind: 'timeout' }
+    return finish({ kind: 'timeout' })
   } catch (err) {
-    if (aborted) return { kind: 'timeout' }
+    if (aborted) return finish({ kind: 'timeout' })
     throw err
   } finally {
     clearTimeout(timer)
